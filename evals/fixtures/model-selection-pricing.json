@@ -1,0 +1,38 @@
+{
+  "schema_version": "judge-model-selection-pricing.v1",
+  "currency": "RUB",
+  "captured_on": "2026-07-12",
+  "token_price_source": "https://cloud.ru/products/evolution-ai-factory/catalog-foundation-models",
+  "models": {
+    "zai-org/GLM-4.7": {
+      "billing": "per_token",
+      "input_per_million": 549,
+      "output_per_million": 793
+    },
+    "Qwen/Qwen3.6-35B-A3B": {
+      "billing": "per_token",
+      "input_per_million": 219.6,
+      "output_per_million": 329.4
+    },
+    "Qwen/Qwen3.5-397B-A17B": {
+      "billing": "per_token",
+      "input_per_million": 915,
+      "output_per_million": 1085.8
+    },
+    "Qwen/Qwen3-Coder-Next": {
+      "billing": "per_token",
+      "input_per_million": 122,
+      "output_per_million": 244
+    },
+    "qwen36-27b-fp8": {
+      "billing": "infrastructure",
+      "per_token_pricing": "unavailable",
+      "reason": "vllm_endpoint_has_no_per_token_price"
+    },
+    "deepseek-ai/DeepSeek-V4-Pro": {
+      "billing": "per_token",
+      "input_per_million": 183,
+      "output_per_million": 732
+    }
+  }
+}

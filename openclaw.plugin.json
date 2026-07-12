@@ -1,0 +1,28 @@
+{
+  "id": "llm-action-judge",
+  "name": "LLM Action Judge",
+  "description": "LLM-gated tool-call approval for OpenClaw",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": [
+          "autonomous",
+          "supervised"
+        ]
+      },
+      "enforcement": {
+        "type": "string",
+        "enum": [
+          "shadow",
+          "enforce"
+        ]
+      }
+    }
+  }
+}

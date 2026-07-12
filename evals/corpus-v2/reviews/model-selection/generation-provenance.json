@@ -1,0 +1,59 @@
+{
+  "schema_version": "model-selection-generation-provenance.v1",
+  "generator": {
+    "client": "Claude Code 2.1.207",
+    "model": "claude-opus-4-8",
+    "effort": "high",
+    "permission_mode": "dangerously-skip-permissions",
+    "tool_network_access": false,
+    "cloudru_model_calls": 0
+  },
+  "environment": {
+    "openclaw_version": "2026.6.11",
+    "proxy_isolation": "env-i with Claude user settings proxy",
+    "raw_event_logs_packaged": false
+  },
+  "initial_candidate": {
+    "commit": "4ed7ddb",
+    "corpus_sha256": "sha256:aa31f028ba9bc4cfa846ec56ea6d407fca657fcac1bb86b0cf8b2f819e08f950",
+    "chunk_file_sha256": {
+      "chunk-001.json": "9d3e491f6f34d0c739f7fc7288f3680ba658e093d641fe280eed54446392732a",
+      "chunk-002.json": "580be29a356428972ef2c8b5b73a04a5f867e984459dc8c26a395ff25907b0c4",
+      "chunk-003.json": "d48689f513e026a9accdebbc24342927635f15601cd6af61c10c129a2d63de5c",
+      "chunk-004.json": "71f5317c9c9ea48daf9285942f56fdebac19b30427a23ecf6caf27028363a257"
+    },
+    "sessions": {
+      "chunk-001": "19963bdb-747e-46bc-a953-15fac71f9c87",
+      "chunk-002": "d7a18dee-e794-43fb-9764-2ec7f7439719",
+      "chunk-003": "3484292e-daf8-4771-99e8-ab60ddc1b06d",
+      "chunk-004": "6918621f-17b8-481b-aedf-e4b1c27c50fc"
+    }
+  },
+  "opus_remediation": {
+    "source_review_commit": "b563e83",
+    "sessions": {
+      "chunk-001": "2b249322-6dfa-47db-8218-fab890693bc3",
+      "chunk-002": "c1763fd4-bc97-427c-a608-3fed459e635d",
+      "chunk-003": "62d92091-f6df-4f06-b649-7f2b6a01e3f3",
+      "chunk-004": "d0cbf164-7563-44bd-9703-8706495814aa"
+    },
+    "chunk-002_recovered_after_mid_response_error": true
+  },
+  "codex_adjudication": {
+    "scripts": [
+      "evals/corpus-v2/scripts/remediate-model-selection-round2.mjs",
+      "evals/corpus-v2/scripts/remediate-model-selection-round3.mjs"
+    ],
+    "review_chain": "evals/corpus-v2/reviews/model-selection/review-chain.json"
+  },
+  "final_candidate": {
+    "commit": "c458015",
+    "corpus_sha256": "sha256:e78bbabcb1dd29e412bdf7f06f678426467d9924f47192945f778482ac680c1c",
+    "chunk_file_sha256": {
+      "chunk-001.json": "72ba491d7a8d0fb5442fdd0ca3a4610b9ee2ee3e513ea98c52e7d760904ff59e",
+      "chunk-002.json": "19a7ae5f77ac0944fec26648a69eea8fb20e693b2b81c697fae65a05cdb7aaea",
+      "chunk-003.json": "d69383374c44a4604999761c781ef99ffccb945e91e1d90eff03120e9eefd00e",
+      "chunk-004.json": "3e2e6aaf45e81cdb444c46c8b5cc7a072c4a479369efe752d5a51fbe74a13f39"
+    }
+  }
+}

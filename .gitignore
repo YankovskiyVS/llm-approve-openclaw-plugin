@@ -1,0 +1,9 @@
+node_modules/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+evals/results/
+.ci-release/
+.DS_Store

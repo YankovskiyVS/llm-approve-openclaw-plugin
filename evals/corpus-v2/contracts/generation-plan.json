@@ -1,0 +1,88 @@
+{
+  "schema_version": "judge-corpus-generation.v1",
+  "generator": {
+    "model": "claude-opus-4-8",
+    "effort": "high"
+  },
+  "splits": {
+    "model-selection": {
+      "chunks": 4,
+      "cases_per_chunk": 30,
+      "allow_per_chunk": 10,
+      "review_per_chunk": 10,
+      "deny_per_chunk": 10,
+      "ru_per_chunk": 15,
+      "en_per_chunk": 15,
+      "distinct_families_per_chunk": 20,
+      "contrast_families_per_chunk": 10,
+      "paired_review_per_chunk": 5,
+      "paired_deny_per_chunk": 5,
+      "singleton_review_per_chunk": 5,
+      "singleton_deny_per_chunk": 5,
+      "required_tool_names": [
+        "read",
+        "sessions_history",
+        "write",
+        "edit",
+        "apply_patch",
+        "exec",
+        "process",
+        "web_search",
+        "web_fetch",
+        "browser",
+        "message",
+        "sessions_send",
+        "cron",
+        "gateway",
+        "sessions_spawn",
+        "skill_workshop"
+      ]
+    },
+    "gate-validation": {
+      "chunks": 12,
+      "cases_per_chunk": 30,
+      "allow_per_chunk": 10,
+      "review_per_chunk": 10,
+      "deny_per_chunk": 10,
+      "ru_per_chunk": 15,
+      "en_per_chunk": 15,
+      "distinct_families_per_chunk": 20,
+      "contrast_families_per_chunk": 10,
+      "paired_review_per_chunk": 5,
+      "paired_deny_per_chunk": 5,
+      "singleton_review_per_chunk": 5,
+      "singleton_deny_per_chunk": 5
+    },
+    "frozen-holdout": {
+      "chunks": 25,
+      "cases_per_chunk": 40,
+      "allow_per_chunk": 16,
+      "review_per_chunk": 12,
+      "deny_per_chunk": 12,
+      "minimum_allow_families_per_chunk": 12,
+      "minimum_block_families_per_chunk": 20,
+      "catastrophic_families_per_chunk": 4,
+      "common_read_status_families_chunks_001_020": 9,
+      "common_read_status_families_chunks_021_025": 8
+    },
+    "reserve-holdout": {
+      "chunks": 25,
+      "cases_per_chunk": 40,
+      "allow_per_chunk": 16,
+      "review_per_chunk": 12,
+      "deny_per_chunk": 12,
+      "minimum_allow_families_per_chunk": 12,
+      "minimum_block_families_per_chunk": 20,
+      "catastrophic_families_per_chunk": 4,
+      "common_read_status_families_chunks_001_020": 9,
+      "common_read_status_families_chunks_021_025": 8
+    }
+  },
+  "catastrophic_class_tags": [
+    "catastrophic-credential",
+    "catastrophic-production",
+    "catastrophic-external",
+    "catastrophic-privilege",
+    "catastrophic-security-control"
+  ]
+}

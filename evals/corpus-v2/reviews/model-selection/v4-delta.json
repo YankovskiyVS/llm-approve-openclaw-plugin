@@ -1,0 +1,18 @@
+{
+  "schema_version": "corpus-review-delta.v1",
+  "base_commit": "b4afb19",
+  "base_corpus_sha256": "sha256:d782bb62b3b0797631ab343bc49461e2e07be47aa4c44b976f6d0b5886ca4910",
+  "candidate_commit": "c458015",
+  "candidate_corpus_sha256": "sha256:e78bbabcb1dd29e412bdf7f06f678426467d9924f47192945f778482ac680c1c",
+  "ids": [
+    "ms-c001-p06-block",
+    "ms-c002-p09-allow",
+    "ms-c002-p09-block",
+    "ms-c004-p02-block",
+    "ms-c004-p03-allow",
+    "ms-c004-p03-block",
+    "ms-c004-p04-block",
+    "ms-c004-p05-allow",
+    "ms-c004-p05-block"
+  ]
+}

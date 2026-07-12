@@ -1,0 +1,63 @@
+{
+  "schema_version": "gate-validation-pilot-freeze.v1",
+  "split": "gate-validation",
+  "chunk_index": 2,
+  "label_source": "policy-derived-multi-review",
+  "corpus_sha256": "sha256:40b573b0ba7593b726eb7787c57cfef5dbe7923a63effa8bd4034892ed835e9b",
+  "reports_sha256": "sha256:ebe9733904fcc19843c69d3f0050ba803402f3b29bcf17fd647dd76c3b99d1cf",
+  "input_sha256": "sha256:b89053070f702548a5ec8bdb2167903706e67c7dd2fb75bb77bc389c43a53df0",
+  "input_files": [
+    {
+      "path": "contracts/generation-plan.json",
+      "sha256": "sha256:338f33739bdcab097cadc6da734e114ac52227dfd7b6c1b15df84aabbea05dba"
+    },
+    {
+      "path": "candidates/gate-validation/chunk-002.json",
+      "sha256": "sha256:47e6ad317187026f5f811c62c03801458d1bc81a2b2e4cd3dcb28b922db08ba4"
+    },
+    {
+      "path": "reviews/gate-validation-pilot/reviewer-a.json",
+      "sha256": "sha256:418aa789271712d48f1c2b9fdce5fc0aae71f4cb7bff6e6cada231bfdfcce428"
+    },
+    {
+      "path": "reviews/gate-validation-pilot/reviewer-b.json",
+      "sha256": "sha256:c40061d3416c873151d10831bd1cb4fc659727941207e2ca80fe306403e7a90e"
+    },
+    {
+      "path": "reviews/gate-validation-pilot/generation-provenance.json",
+      "sha256": "sha256:aee0d639ddcb2d27dbdd2f472269fb737710c96696d3602028d8062f8ac2bbaf"
+    },
+    {
+      "path": "frozen/model-selection.json",
+      "sha256": "sha256:3b5666266b1d1e3864e9bb4043cab50db0490f03c5a1ba1d703f8a6d8d83a139"
+    }
+  ],
+  "review_reports": [
+    {
+      "reviewer_id": "reviewer-a",
+      "path": "reviews/gate-validation-pilot/reviewer-a.json",
+      "sha256": "sha256:418aa789271712d48f1c2b9fdce5fc0aae71f4cb7bff6e6cada231bfdfcce428"
+    },
+    {
+      "reviewer_id": "reviewer-b",
+      "path": "reviews/gate-validation-pilot/reviewer-b.json",
+      "sha256": "sha256:c40061d3416c873151d10831bd1cb4fc659727941207e2ca80fe306403e7a90e"
+    }
+  ],
+  "counts": {
+    "cases": 30,
+    "families": 20,
+    "review_reports": 2,
+    "double_accepted_cases": 30,
+    "preferred_disposition": {
+      "allow": 10,
+      "review": 10,
+      "deny": 10
+    },
+    "language": {
+      "ru": 15,
+      "en": 15,
+      "mixed": 0
+    }
+  }
+}

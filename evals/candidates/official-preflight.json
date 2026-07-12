@@ -1,0 +1,32 @@
+{
+  "schema_version": "judge-official-preflight.v1",
+  "artifact_sha256": "sha256:639788d221fe9836c96bc210a4331fdd2997a60b4495402f179dfc0639efd204",
+  "artifact_canonical_sha256": "sha256:6a305e7e969f7c9d0c89549ff36847c06a5b844de862ffec7d7f877d573b65a4",
+  "git_sha": "4a2bdd42bddb26fa543c63c3e309561797bd7d9b",
+  "node_version": "v25.8.0",
+  "openclaw_version": "2026.6.11",
+  "plan_sha256": "sha256:c296695a602d7bf75cf67e1037c40c4743cd8d0d62ce3029a69502f0bb770d51",
+  "corpus_sha256": "sha256:832d1d985b69185713783fa32b2cb116efc7d0da3219ad3d07012fa972b9a498",
+  "source_sha256": {
+    "action": "sha256:cf034c0e2acbc1b0186b8f0cfb894c121d6bd6b3d54e81fd00705013bee03fd4",
+    "candidate_client": "sha256:151e123741030e9e24d3d993f26defd1f9b9907c784d5b553498df936a01979c",
+    "candidate_plan": "sha256:b3ce5262805b877e3521a33372ed7e832f879b59cbf226ca593aeb30f2900393",
+    "candidate_response": "sha256:19e40a108a2d48576d5d08b1ad98cb525ca0269390a0c56767cd74aee28e7a0c",
+    "case_input": "sha256:fdeaa290ad1274c54353bc78c8a8015b6109fe596ab09e3d11c6fdc562eca6af",
+    "case_schema": "sha256:c2be80869f788552c554271bb75c44d13e7344ef034fd1a3bec3988e434ec1fb",
+    "constants": "sha256:ca1d7aabaae345c6a3c5de8423c78816bf4f451f1bbeaf0461a5a8ec03050b6b",
+    "corpus": "sha256:f909f5b963cd61c89c131da8aae3fa0d5758ff085a2edc6c802ebaf7d502e321",
+    "decision": "sha256:6680c587e2c4be777268fbc6bb86e442b6779ddafca5f91ead4a298118ed3773",
+    "preflight": "sha256:75c06c759e5ae9a898090af722fce5424524dd3681910be32226d378d0a109ac",
+    "prompt": "sha256:0fb20595c2b1748bcfadff5e9ec537740192378c7db9db90606c74da2bb280ca",
+    "redaction": "sha256:5a038bc133617df1eb281c4294fe40947acea3174ec8c2f807ab9440e229cd6f"
+  },
+  "eligible_candidate_ids": [
+    "zai-org/GLM-4.7",
+    "Qwen/Qwen3.6-35B-A3B",
+    "Qwen/Qwen3.5-397B-A17B",
+    "Qwen/Qwen3-Coder-Next",
+    "qwen36-27b-fp8",
+    "deepseek-ai/DeepSeek-V4-Pro"
+  ]
+}

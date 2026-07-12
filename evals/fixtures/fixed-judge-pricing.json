@@ -1,0 +1,12 @@
+{
+  "schema_version": "judge-pricing.v1",
+  "currency": "RUB",
+  "captured_on": "2026-07-12",
+  "models": {
+    "Qwen/Qwen3.5-397B-A17B": {
+      "input_per_million": 915,
+      "output_per_million": 1085.8,
+      "source": "https://cloud.ru/products/evolution-ai-factory/catalog-foundation-models"
+    }
+  }
+}

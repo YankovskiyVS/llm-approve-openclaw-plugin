@@ -1,0 +1,31 @@
+{
+  "schema_version": "independent-reviewer-provenance.v1",
+  "evidence_level": "orchestrator-lineage-attestation",
+  "limitations": "Distinct orchestrator threads and bound report hashes are verified; this is not an external cryptographic identity signature.",
+  "reviewers": [
+    {
+      "lineage_id": "/root/corpus_review_a",
+      "peer_lineage_id": "/root/corpus_review_b",
+      "initial_context_fork": "none",
+      "peer_report_access_prohibited": true,
+      "peer_report_access_attested_false": true,
+      "reports": {
+        "reviewer-a-v2.json": "sha256:f8c478b2a0722732ae4f3b00f0f74e94ad4c18ee2e785af57b72b31d0a02f9c0",
+        "reviewer-a-v3-delta.json": "sha256:355c8faffbe5f06065b1ab35d18af6e836a87b5633821757d31a5d67ce263e07",
+        "reviewer-a-v4-delta.json": "sha256:c7a30cfb24197a31854e7afba4ad7b461c651ae080cf84982c057291328056e9"
+      }
+    },
+    {
+      "lineage_id": "/root/corpus_review_b",
+      "peer_lineage_id": "/root/corpus_review_a",
+      "initial_context_fork": "none",
+      "peer_report_access_prohibited": true,
+      "peer_report_access_attested_false": true,
+      "reports": {
+        "reviewer-b-v2.json": "sha256:782aed5c40d34c949a607a2121cdf8bc0194ea957dd992d029ca2932ae01dd81",
+        "reviewer-b-v3-delta.json": "sha256:a29d59422fb59c0c837ae94839fb79e51a79ed9609e43bf5402deb8ae007704c",
+        "reviewer-b-v4-delta.json": "sha256:1a115b1aa92f82e4a9318cd2c7473bd2aa4614464ab699019e761fffff9550d6"
+      }
+    }
+  ]
+}

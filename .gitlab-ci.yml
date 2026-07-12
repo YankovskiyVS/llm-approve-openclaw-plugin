@@ -1,0 +1,23 @@
+image: node:22.19.0-bookworm-slim
+
+stages:
+  - test
+  - package
+
+test:
+  stage: test
+  script:
+    - git diff --check
+    - npm test
+
+package:
+  stage: package
+  script:
+    - node -e "const p=require('./package.json');if(process.env.CI_COMMIT_TAG&&process.env.CI_COMMIT_TAG!=='v'+p.version)process.exit(1)"
+    - node scripts/build-release.mjs .ci-release/v0.3.0
+    - cd .ci-release/v0.3.0 && sha256sum -c openclaw-llm-action-judge-0.3.0.tgz.sha256 && cd ../..
+    - tar -tzf .ci-release/v0.3.0/openclaw-llm-action-judge-0.3.0.tgz
+  artifacts:
+    paths:
+      - .ci-release/v0.3.0/
+    expire_in: 30 days

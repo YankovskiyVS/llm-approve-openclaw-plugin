@@ -1,0 +1,76 @@
+{
+  "schema_version": "gate-validation-pilot-generation-provenance.v1",
+  "generator": {
+    "client": "Claude Code 2.1.207",
+    "model": "claude-opus-4-8",
+    "effort": "high",
+    "permission_mode": "dangerously-skip-permissions",
+    "tool_network_access": false,
+    "cloudru_model_calls": 0
+  },
+  "environment": {
+    "openclaw_version": "2026.6.11",
+    "proxy_isolation": "env-i with Claude user settings proxy",
+    "raw_event_logs_packaged": false
+  },
+  "initial_generation": {
+    "sessions": {
+      "chunk-001": "4f568473-2f2e-422d-b7a9-06c19dc2b1ad",
+      "chunk-002": "403b596a-fd69-47c3-9065-3f6fb44951c0",
+      "chunk-003": "dc5e3253-2046-4477-b3de-ee7de58079bc",
+      "chunk-004": "fc720b74-1e73-4954-b6df-49a4bed1fd9b"
+    },
+    "chunk_file_sha256": {
+      "chunk-001.json": "a20637915c915b1915c3032ab1eb6b5bbddffedc0e264696a7d55220a2108a08",
+      "chunk-002.json": "a8357eb7dc5729e23be1ce109682ccba02f7c2aa97cb9f01e287c7df4a4459d5",
+      "chunk-003.json": "6865be8a5dccf20fb69abd1999f6e0319e2844596f4c470b2646d5dc9d605c21",
+      "chunk-004.json": "6565ff52d8cbecf17c6bda1c7474cfeae33cd91d4c5c047016d0dc623153945d"
+    }
+  },
+  "pilot_remediation": {
+    "session": "47c3d25d-6f78-4916-a2e1-0c87742edeff",
+    "source_chunk_sha256": "a8357eb7dc5729e23be1ce109682ccba02f7c2aa97cb9f01e287c7df4a4459d5",
+    "reviewer_a_sha256": "d6a7a7a590cb9081ad851dd4d88a5446ea2925bdfe757fe3d79bcdc554005053",
+    "reviewer_b_sha256": "b8559d5fcbf4cb542445da9d6cab207f88df7fcefbaad88bf72406733eb1860d",
+    "changed_case_ids": [
+      "gv-c002-p03-block",
+      "gv-c002-p06-block",
+      "gv-c002-p10-block",
+      "gv-c002-s01",
+      "gv-c002-s02",
+      "gv-c002-s04",
+      "gv-c002-s07",
+      "gv-c002-s10"
+    ],
+    "opus_remediated_chunk_sha256": "370f506d6245a0845fb12bfcb6c894f80b8a6535d6253ce93d799e6e39f07bb7"
+  },
+  "codex_adjudication": {
+    "source_chunk_sha256": "370f506d6245a0845fb12bfcb6c894f80b8a6535d6253ce93d799e6e39f07bb7",
+    "changed_case_ids": [
+      "gv-c002-s02"
+    ],
+    "reason": "replace credential-like bytes with an observable external file exfiltration scenario",
+    "final_chunk_sha256": "47e6ad317187026f5f811c62c03801458d1bc81a2b2e4cd3dcb28b922db08ba4"
+  },
+  "final_review": {
+    "policy_version": "2026-07-12.4",
+    "candidate_sha256": "sha256:47e6ad317187026f5f811c62c03801458d1bc81a2b2e4cd3dcb28b922db08ba4",
+    "corpus_sha256": "sha256:40b573b0ba7593b726eb7787c57cfef5dbe7923a63effa8bd4034892ed835e9b",
+    "reviewers": [
+      {
+        "reviewer_id": "reviewer-a",
+        "lineage_id": "/root/gv_pilot_review_a_v2",
+        "peer_report_access_attested_false": true,
+        "report_path": "reviews/gate-validation-pilot/reviewer-a.json",
+        "report_sha256": "sha256:418aa789271712d48f1c2b9fdce5fc0aae71f4cb7bff6e6cada231bfdfcce428"
+      },
+      {
+        "reviewer_id": "reviewer-b",
+        "lineage_id": "/root/gv_pilot_review_b_v2",
+        "peer_report_access_attested_false": true,
+        "report_path": "reviews/gate-validation-pilot/reviewer-b.json",
+        "report_sha256": "sha256:c40061d3416c873151d10831bd1cb4fc659727941207e2ca80fe306403e7a90e"
+      }
+    ]
+  }
+}

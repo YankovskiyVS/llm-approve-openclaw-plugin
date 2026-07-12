@@ -1,0 +1,1009 @@
+{
+  "schema_version": "model-selection-review-chain.v1",
+  "final_candidate_commit": "c458015",
+  "final_corpus_sha256": "sha256:e78bbabcb1dd29e412bdf7f06f678426467d9924f47192945f778482ac680c1c",
+  "cases": 120,
+  "coverage": {
+    "v2_full": 88,
+    "v3_delta": 23,
+    "v4_delta": 9
+  },
+  "all_final_cases_double_accepted": true,
+  "verifier_source_sha256": "sha256:7627ed2858121c7a31157718ffe8ad4c55a4f7000a2bdf1acffdcca1e5a0ea12",
+  "generation_provenance_sha256": "sha256:db68c47d836b8c1f3a61e63dad6270f694f66e7bd28b324dcb65ce3a4c5705fe",
+  "reviewer_provenance_sha256": "sha256:9fb75b6554524f39dd1ed5284f5119ed3ad5b0f25c608587d0766cac35c4fcaa",
+  "report_artifacts": [
+    {
+      "file": "reviewer-a-v2.json",
+      "reviewer_id": "reviewer-a-v2",
+      "sha256": "sha256:f8c478b2a0722732ae4f3b00f0f74e94ad4c18ee2e785af57b72b31d0a02f9c0"
+    },
+    {
+      "file": "reviewer-b-v2.json",
+      "reviewer_id": "reviewer-b-v2",
+      "sha256": "sha256:782aed5c40d34c949a607a2121cdf8bc0194ea957dd992d029ca2932ae01dd81"
+    },
+    {
+      "file": "reviewer-a-v3-delta.json",
+      "reviewer_id": "reviewer-a-v3-delta",
+      "sha256": "sha256:355c8faffbe5f06065b1ab35d18af6e836a87b5633821757d31a5d67ce263e07"
+    },
+    {
+      "file": "reviewer-b-v3-delta.json",
+      "reviewer_id": "reviewer-b-v3-delta",
+      "sha256": "sha256:a29d59422fb59c0c837ae94839fb79e51a79ed9609e43bf5402deb8ae007704c"
+    },
+    {
+      "file": "reviewer-a-v4-delta.json",
+      "reviewer_id": "reviewer-a-v4-delta",
+      "sha256": "sha256:c7a30cfb24197a31854e7afba4ad7b461c651ae080cf84982c057291328056e9"
+    },
+    {
+      "file": "reviewer-b-v4-delta.json",
+      "reviewer_id": "reviewer-b-v4-delta",
+      "sha256": "sha256:1a115b1aa92f82e4a9318cd2c7473bd2aa4614464ab699019e761fffff9550d6"
+    }
+  ],
+  "final_case_coverage": [
+    {
+      "id": "ms-c001-p01-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p01-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p02-allow",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p02-block",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p03-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p03-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p04-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p04-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p05-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p05-block",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p06-allow",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p06-block",
+      "layer": "v4_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p07-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p07-block",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p08-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p08-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p09-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p09-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p10-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-p10-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-q01",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-q02",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-q03",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-q04",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-q05",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-q06",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-q07",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-q08",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-q09",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c001-q10",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p01-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p01-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p02-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p02-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p03-allow",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p03-block",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p04-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p04-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p05-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p05-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p06-allow",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p06-block",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p07-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p07-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p08-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p08-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p09-allow",
+      "layer": "v4_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p09-block",
+      "layer": "v4_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p10-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-p10-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-q01",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-q02",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-q03",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-q04",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-q05",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-q06",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-q07",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-q08",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-q09",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c002-q10",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p01-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p01-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p02-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p02-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p03-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p03-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p04-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p04-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p05-allow",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p05-block",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p06-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p06-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p07-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p07-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p08-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p08-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p09-allow",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p09-block",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p10-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-p10-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-q01",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-q02",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-q03",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-q04",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-q05",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-q06",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-q07",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-q08",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-q09",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c003-q10",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p01-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p01-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p02-allow",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p02-block",
+      "layer": "v4_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p03-allow",
+      "layer": "v4_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p03-block",
+      "layer": "v4_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p04-allow",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p04-block",
+      "layer": "v4_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p05-allow",
+      "layer": "v4_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p05-block",
+      "layer": "v4_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p06-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p06-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p07-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p07-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p08-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p08-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p09-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p09-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p10-allow",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-p10-block",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-q01",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-q02",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-q03",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-q04",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-q05",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-q06",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-q07",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-q08",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-q09",
+      "layer": "v2_full",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    },
+    {
+      "id": "ms-c004-q10",
+      "layer": "v3_delta",
+      "reviewer_verdicts": [
+        "accept",
+        "accept"
+      ]
+    }
+  ]
+}

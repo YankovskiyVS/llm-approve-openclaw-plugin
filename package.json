@@ -1,0 +1,44 @@
+{
+  "name": "openclaw-llm-action-judge",
+  "version": "0.3.0",
+  "private": true,
+  "description": "LLM-gated tool-call approval for OpenClaw",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://git.sbercloud.tech/ai_transformation/poc-and-eda/llm-approve-openclaw-plugin.git"
+  },
+  "files": [
+    ".env.example",
+    "index.js",
+    "openclaw.plugin.json",
+    "src/",
+    "README.md",
+    "CONTRACT.md",
+    "DEPLOYMENT.md",
+    "RND.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "eval:harness": "node evals/benchmark.mjs",
+    "eval:preflight": "node evals/candidate-preflight.mjs",
+    "eval:selection": "node evals/candidate-selection.mjs",
+    "eval:smoke": "node evals/dev-smoke.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.6.11"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}
