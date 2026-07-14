@@ -97,11 +97,13 @@ const INERT_TEMPLATE_NAME = /(?:^|[._-])(?:example|sample|template|tmpl)$/u;
 const DOCUMENTATION_FILE = /\.(?:adoc|markdown|md|rst)$/u;
 const ENV_FILE = /^\.env(?:\..+)?$/u;
 const PRIVATE_KEY_FILE = /^(?:id_(?:dsa|ecdsa|ed25519|rsa)|.*(?:private[._-]?key|privkey).*)$/u;
+const PRIVATE_KEY_EXTENSION = /\.(?:jks|key|p12|pfx)$/u;
 const PUBLIC_KEY_FILE = /^(?:id_(?:dsa|ecdsa|ed25519|rsa)|.*(?:public[._-]?key|pubkey).*)\.pub$/u;
-const CREDENTIAL_NAME = /(?:^|[._-])(?:api[._-]?key|credentials?|secrets?|tokens?)(?:[._-]|$)/u;
+const CREDENTIAL_NAME = /(?:^|[._-])(?:access[._-]?tokens?|api[._-]?keys?|bearers?|client[._-]?secrets?|cookies?|credentials?|passwords?|passwd|secrets?|tokens?)(?:[._-]|$)/u;
 const SENSITIVE_READ_FILES = new Set([
   '.netrc',
   '.npmrc',
+  '.pgpass',
   '.pypirc',
   '.yarnrc',
   '.yarnrc.yml',
@@ -379,8 +381,13 @@ function pathHasRawTraversal(path) {
   return /(?:^|[\\/])(?:[a-zA-Z]:)?\.\.(?=[\\/]|$)/u.test(path);
 }
 
+function pathHasAmbiguousWindowsAlias(path) {
+  if (path.startsWith('\\\\?\\') || path.startsWith('\\\\.\\')) return true;
+  return path.split(/[\\/]+/u).some((segment) => segment !== '' && /[ .]$/u.test(segment));
+}
+
 function targetsCredentialMaterial(path) {
-  if (pathHasRawTraversal(path)) return true;
+  if (pathHasRawTraversal(path) || pathHasAmbiguousWindowsAlias(path)) return true;
   const segments = path
     .replaceAll('\\', '/')
     .split('/')
@@ -392,11 +399,16 @@ function targetsCredentialMaterial(path) {
   if (INERT_TEMPLATE_NAME.test(name) || PUBLIC_KEY_FILE.test(name)) return false;
   if (ENV_FILE.test(name)
     || SENSITIVE_READ_FILES.has(name)
-    || PRIVATE_KEY_FILE.test(name)) return true;
+    || PRIVATE_KEY_FILE.test(name)
+    || PRIVATE_KEY_EXTENSION.test(name)) return true;
+  if (segments.at(-2) === '.docker' && name === 'config.json') return true;
   if (segments.at(-2) === '.kube' && name === 'config') return true;
+  if (segments.slice(0, -1).some((segment) => SENSITIVE_READ_DIRECTORIES.has(segment))) {
+    return true;
+  }
   if (DOCUMENTATION_FILE.test(name)) return false;
   if (CREDENTIAL_NAME.test(name)) return true;
-  return segments.slice(0, -1).some((segment) => SENSITIVE_READ_DIRECTORIES.has(segment));
+  return false;
 }
 
 function gatewayPathIsSensitive(path) {
