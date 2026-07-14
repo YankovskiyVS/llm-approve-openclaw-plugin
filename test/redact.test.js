@@ -176,6 +176,37 @@ test('fails closed before truncating a JSON-looking credential payload', () => {
   assert.equal(result, REDACTED);
 });
 
+test('redacts raw payloads only for exact OpenClaw config write actions', () => {
+  const secret = 'json5-config-raw-fixture-never-send-x85';
+  const json5 = `{ profiles: { default: { key: '${secret}' } } }`;
+
+  for (const action of ['config.set', 'config.apply', 'config.patch']) {
+    const result = redactForJudge({ action, raw: json5, path: 'models.providers' });
+    assert.equal(JSON.stringify(result).includes(secret), false, action);
+    assert.equal(result.action, action);
+    assert.equal(result.raw, REDACTED);
+    assert.equal(result.path, 'models.providers');
+  }
+
+  const configSet = redactForJudge({
+    action: 'config.set',
+    path: 'models.providers.cloudru.apiKey',
+    value: secret,
+  });
+  assert.equal(JSON.stringify(configSet).includes(secret), false, 'config.set value remained');
+  assert.equal(configSet.value, REDACTED);
+
+  assert.deepEqual(redactForJudge({ action: 'config.get', raw: 'public', value: 'ordinary' }), {
+    action: 'config.get',
+    raw: 'public',
+    value: 'ordinary',
+  });
+  assert.deepEqual(redactForJudge({ action: 'status', raw: 'public' }), {
+    action: 'status',
+    raw: 'public',
+  });
+});
+
 test('recursively redacts secret-bearing keys without mutating input', () => {
   const secrets = [
     'token-fixture-7f31',

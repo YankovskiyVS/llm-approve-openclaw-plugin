@@ -118,7 +118,6 @@ const SENSITIVE_READ_FILES = new Set([
 const SENSITIVE_READ_DIRECTORIES = new Set([
   '.direnv',
   '.kube',
-  '.openclaw',
   '.ssh',
   'credentials',
   'secrets',
@@ -148,6 +147,10 @@ const MASTER_PASSWD_FILE = /^master\.passwd(?:-|~|\.(?:bak|backup|old|\d+))?$/u;
 const SSH_HOST_PRIVATE_KEY = /^ssh_host_[^/]+_key(?:-|~|\.(?:bak|backup|old|\d+))?$/u;
 const SSH_HOST_PUBLIC_KEY_PATH = /^\/(?:private\/)?etc\/ssh\/ssh_host_[^/]+_key\.pub$/u;
 const KUBERNETES_CREDENTIAL_CONFIG = /^(?:[^/]*admin|bootstrap-kubelet|cluster|controller-manager|kubelet|scheduler)\.conf$/u;
+const OPENCLAW_ROOT_CONFIG = /^openclaw\.json(?:~|\.(?:bak(?:\.\d+)?|backup|last-good|old|\d+))?$/u;
+const OPENCLAW_AUTH_STORE = /^(?:auth|auth-profiles|auth-state)\.json(?:~|\.(?:bak(?:\.\d+)?|backup|old|\d+))?$/u;
+const OPENCLAW_IDENTITY_STORE = /^(?:device|device-auth)\.json(?:~|\.(?:bak(?:\.\d+)?|backup|old|\d+))?$/u;
+const OPENCLAW_PAIRING_STORE = /^(?:paired|pending)\.json(?:~|\.(?:bak(?:\.\d+)?|backup|old|\d+))?$/u;
 
 function isPlainObject(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -426,6 +429,20 @@ function filenameStem(name) {
   return extensionIndex > 0 ? name.slice(0, extensionIndex) : name;
 }
 
+function targetsOpenClawSecretStore(segments) {
+  const stateIndex = segments.lastIndexOf('.openclaw');
+  if (stateIndex < 0) return false;
+  const relative = segments.slice(stateIndex + 1);
+  const name = relative.at(-1);
+  if (relative.length === 1 && OPENCLAW_ROOT_CONFIG.test(name)) return true;
+  const defaultAuthStore = relative.length === 1
+    || (relative[0] === 'agents' && relative.at(-2) === 'agent');
+  if (defaultAuthStore && OPENCLAW_AUTH_STORE.test(name)) return true;
+  if (relative.at(-2) === 'identity' && OPENCLAW_IDENTITY_STORE.test(name)) return true;
+  return (relative.at(-2) === 'devices' || relative.at(-2) === 'nodes')
+    && OPENCLAW_PAIRING_STORE.test(name);
+}
+
 function targetsCredentialMaterial(path) {
   if (pathHasRawTraversal(path)
     || pathHasAmbiguousWindowsAlias(path)
@@ -447,6 +464,7 @@ function targetsCredentialMaterial(path) {
     || PRIVATE_KEY_EXTENSION.test(name)
     || PRIVATE_PEM_FILE.test(name)) return true;
   if (targetsSensitiveSystemPath(path)) return true;
+  if (targetsOpenClawSecretStore(segments)) return true;
   if (segments.at(-2) === '.docker' && name === 'config.json') return true;
   if (segments.at(-2) === '.kube' && name === 'config') return true;
   if (segments.slice(0, -1).some((segment) => SENSITIVE_READ_DIRECTORIES.has(segment))) {

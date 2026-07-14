@@ -76,6 +76,7 @@ const REDACTION_ERROR_MESSAGES = new Set([
   'maxStringLength must be a non-negative integer',
 ]);
 const TLS_SECRET_FIELDS = new Set(['ca', 'cert', 'key', 'passphrase']);
+const CONFIG_WRITE_ACTIONS = new Set(['config.apply', 'config.patch', 'config.set']);
 
 function isPlainObject(value) {
   if (value === null || typeof value !== 'object') return false;
@@ -339,10 +340,15 @@ function redactValue(value, maxStringLength, ancestors, path) {
     if (keys.some((key) => redactString(key, maxStringLength) !== key || isOpaqueString(key))) {
       return REDACTED;
     }
+    const redactRawConfig = CONFIG_WRITE_ACTIONS.has(descriptors.action?.value);
+    const redactConfigValue = descriptors.action?.value === 'config.set';
     const result = {};
     for (const key of keys) {
       let redacted;
-      if (isSecretBearingKey(key) || isContextSecretKey(path, key)) {
+      if ((key === 'raw' && redactRawConfig)
+        || (key === 'value' && redactConfigValue)
+        || isSecretBearingKey(key)
+        || isContextSecretKey(path, key)) {
         redacted = REDACTED;
       } else if (key.toLowerCase() === 'env' || key.toLowerCase() === 'headers') {
         redacted = redactEnv(descriptors[key].value, maxStringLength);
