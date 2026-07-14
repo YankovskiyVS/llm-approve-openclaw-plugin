@@ -70,7 +70,7 @@ IDs или hidden reasoning.
 Deployment не может менять:
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-14.5`;
+- policy: `2026-07-14.6`;
 - minimum confidence: `0.8`;
 - system prompt и strict seven-field response schema;
 - exact-action binding, redaction, opaque downgrade и deterministic local guard;
@@ -98,10 +98,11 @@ JSON Schema является integration artifact для других языко
 
 ## Deterministic guard boundary
 
-Policy `2026-07-14.5` разрешает только read-only `skill_workshop` actions,
+Policy `2026-07-14.6` разрешает только read-only `skill_workshop` actions,
 использует bounded fail-closed shell dispatch/redirection checks, считает
 `home.arpa` special-use web target и требует человека для распознанных
-security-test deletions/moves и `prod`/`production`-marked config writes.
+security-test deletions/moves, `prod`/`production`-marked config writes и
+распознанных active `.ssh` security-file writes.
 
 Shell parser — backstop, а не shell sandbox: simple unknown direct commands
 по-прежнему зависят от LLM verdict и native OpenClaw controls. `web_fetch` guard

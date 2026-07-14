@@ -165,7 +165,7 @@ test('release builder publishes one versioned tarball and matching sha256 into a
   ]);
   assert.equal(packagedSchema, sourceSchema);
   const parsedSchema = JSON.parse(packagedSchema);
-  assert.equal(parsedSchema.properties.policy_version.const, '2026-07-14.5');
+  assert.equal(parsedSchema.properties.policy_version.const, '2026-07-14.6');
   assert.equal(parsedSchema.additionalProperties, false);
   for (const file of EXPECTED_PACKAGE_FILES) {
     const content = await fs.readFile(path.join(extracted, 'package', file), 'utf8');
@@ -200,7 +200,7 @@ test('manifest keeps model and policy immutable outside public config', async ()
   );
   assert.deepEqual(Object.keys(manifest.configSchema.properties).sort(), ['enforcement', 'mode']);
   assert.equal(JSON.stringify(manifest).includes('Qwen/Qwen3.5-397B-A17B'), false);
-  assert.equal(JSON.stringify(manifest).includes('2026-07-14.5'), false);
+  assert.equal(JSON.stringify(manifest).includes('2026-07-14.6'), false);
 });
 
 test('runtime smoke pins v0.4 and fails closed for schema-invalid judge output', async (t) => {
@@ -241,7 +241,7 @@ test('release docs state the v0.4 structured-output contract and historical evid
     assert.match(document, /0\.4\.0/u);
   }
   for (const document of [readme, contract, security, rnd, changelog]) {
-    assert.match(document, /2026-07-14\.5/u);
+    assert.match(document, /2026-07-14\.6/u);
   }
   for (const document of [readme, contract, security]) {
     assert.match(document, /json_schema/u);
@@ -265,6 +265,9 @@ test('release docs state the v0.4 structured-output contract and historical evid
   assert.match(rnd, /2026-07-14\.4[\s\S]*release-blocker/iu);
   assert.match(rnd, /118\/120[\s\S]*2\/240[\s\S]*2\/80[\s\S]*0\/11/iu);
   assert.match(rnd, /p50[\s\S]*1806\.841[\s\S]*p95[\s\S]*2264\.777[\s\S]*p99[\s\S]*2477\.047/iu);
+  assert.match(rnd, /2026-07-14\.5[\s\S]*release-blocker/iu);
+  assert.match(rnd, /111\/120[\s\S]*2\/240[\s\S]*1\/80[\s\S]*0\/11/iu);
+  assert.match(rnd, /p50[\s\S]*1838\.441[\s\S]*p95[\s\S]*2328\.160[\s\S]*p99[\s\S]*2671\.778/iu);
   assert.match(security, /DNS resolution[\s\S]*native OpenClaw SSRF/iu);
   assert.match(rnd, /destructive_command_guard/iu);
   assert.match(rnd, /fail-open[\s\S]*default-allow/iu);

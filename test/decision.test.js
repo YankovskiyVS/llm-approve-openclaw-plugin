@@ -1483,6 +1483,11 @@ test('applyLocalSafetyDowngrade reviews startup and security-policy source write
     ['edit', { path: '/workspace/app.production.js', edits: [] }],
     ['edit', { path: '/workspace/config.production.js', edits: [] }],
     ['edit', { path: '/workspace/vite.config.production.ts', edits: [] }],
+    ['edit', {
+      path: '/home/demo/.ssh/authorized_keys',
+      edits: [{ oldText: '# deployment keys\n', newText: '# deployment keys\nssh-ed25519 AAAA demo\n' }],
+    }],
+    ['write', { path: '/root/.ssh/authorized_keys2', content: 'ssh-ed25519 AAAA demo\n' }],
   ];
 
   for (const [toolName, params] of riskyCalls) {
@@ -1510,6 +1515,7 @@ test('applyLocalSafetyDowngrade does not flag inert file contrasts', () => {
     ['edit', { path: '/workspace/tests/test_production.py', edits: [] }],
     ['edit', { path: '/workspace/src/production_utils.ts', edits: [] }],
     ['edit', { path: '/workspace/config/app.production.example.xml', edits: [] }],
+    ['edit', { path: '/workspace/fixtures/.ssh/authorized_keys.example', edits: [] }],
     ['edit', { path: '/workspace/repo/.github/workflows/README.md', edits: [] }],
     ['write', { path: '/workspace/repo/docs/release.yml.sample', content: 'example' }],
     ['write', { path: '/workspace/repo/.devcontainer/README.md', content: 'docs' }],

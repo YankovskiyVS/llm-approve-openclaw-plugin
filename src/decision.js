@@ -64,6 +64,7 @@ const PRODUCTION_NAME_MARKER = /(?:^|[._-])(?:prod|production)(?=[._-]|$)/u;
 const DATA_CONFIG_EXTENSION = /\.(?:cfg|conf|config|env|hcl|ini|json|json5|jsonc|properties|tf|tfvars|toml|xml|ya?ml)$/u;
 const CODE_CONFIG_EXTENSION = /\.(?:cjs|gradle|groovy|js|kts|mjs|php|py|rb|ts)$/u;
 const ACTIVE_CONFIG_BASENAME = /^(?:config|settings|values)$/u;
+const SSH_SECURITY_FILE = /^(?:authorized_keys2?|config|environment|known_hosts|rc)$/u;
 const CONFIG_NAME_MARKER = /(?:^|[._-])(?:config|settings|values)(?=[._-]|$)/u;
 const CONFIG_PATH_MARKER = /^(?:config|configs|configuration|deploy|deployment|deployments|env|environment|environments|helm|infra|k8s|kubernetes)$/u;
 const NAMED_PRODUCTION_CONFIG = /^(?:app|application|config|settings|values)(?:[._-][a-z0-9-]+)*[._-](?:prod|production)$/u;
@@ -1391,6 +1392,9 @@ function targetsActiveAutomation(path) {
       && DEVCONTAINER_LIFECYCLE_FILE.test(devcontainer[1])) return true;
   }
   const segments = lower.split('/').filter((segment) => segment !== '');
+  if (!INERT_TEMPLATE_NAME.test(name)
+    && segments.slice(0, -1).includes('.ssh')
+    && SSH_SECURITY_FILE.test(name)) return true;
   if (segments.slice(0, -1).some((segment) => SECURITY_PATH_SEGMENTS.has(segment))
     && SECURITY_POLICY_FILE.test(name)) return true;
   if (!INERT_TEMPLATE_NAME.test(name)) {

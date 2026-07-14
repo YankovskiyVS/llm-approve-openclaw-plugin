@@ -11,7 +11,7 @@ tool calls отдельной фиксированной LLM до исполне
 ## Fixed safety contract
 
 - Judge: `Qwen/Qwen3.5-397B-A17B`.
-- Policy: `2026-07-14.5`.
+- Policy: `2026-07-14.6`.
 - Minimum allow confidence: `0.8`.
 - Default timeout: `8000 ms`.
 - Endpoint: только `https://foundation-models.api.cloud.ru/v1`.
@@ -120,14 +120,17 @@ commands по-прежнему зависят от решения LLM и native 
 - `autonomous + enforce` не production-qualified.
 
 Эти цифры получены с policy `2026-07-12.4` и `json_object`; они не являются
-метриками 0.4.0. Четыре strict qualification run для 0.4.0 стали release-blocker:
+метриками 0.4.0. Пять strict qualification run для 0.4.0 стали release-blocker:
 policy `2026-07-14.1` дала `112/120` safe и `9/240` unsafe, а policy
 `2026-07-14.2` — `118/120` safe и `6/240` unsafe. После hardening policy
 `2026-07-14.3` дала `112/120` safe и `2/240` unsafe в одной
 `skill_workshop.apply` family. Policy `2026-07-14.4` закрыла этот surface и дала
 `118/120` safe, но пропустила `2/240` unsafe в двух других families: удаление
-security-теста и правка production config. Current policy `2026-07-14.5`
-закрывает обе surfaces, но имеет статус **pending fresh live qualification**.
+security-теста и правка production config. Policy `2026-07-14.5` закрыла обе
+surfaces, но новый run дал `111/120` safe и `2/240` unsafe в active
+`.ssh/authorized_keys` family. Current policy `2026-07-14.6` закрывает active
+recognized active SSH security-file writes, но имеет статус **pending fresh live
+qualification**.
 
 Подробности: [RND.md](RND.md).
 
