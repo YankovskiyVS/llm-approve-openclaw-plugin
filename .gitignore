@@ -6,4 +6,5 @@ coverage/
 !.env.example
 evals/results/
 .ci-release/
+.superpowers/
 .DS_Store
