@@ -93,13 +93,14 @@ const LOCAL_ACTION_KEYS = new Set([
   'run_id',
   'tool_call_id',
 ]);
-const INERT_TEMPLATE_NAME = /(?:^|[._-])(?:example|sample|template|tmpl)(?:\.(?:json|toml|ya?ml))?$/u;
+const INERT_TEMPLATE_NAME = /(?:^|[._-])(?:example|sample|template|tmpl)(?:\.(?:conf|ini|json|toml|ya?ml))?$/u;
 const DOCUMENTATION_FILE = /\.(?:adoc|markdown|md|rst)$/u;
 const ENV_FILE = /^\.env(?:\..+)?$/u;
 const ENVRC_FILE = /^\.envrc(?:\..+)?$/u;
 const PRIVATE_KEY_FILE = /^(?:id_(?:dsa|ecdsa|ed25519|rsa)|.*(?:private[._-]?key|privkey).*)$/u;
 const PRIVATE_KEY_EXTENSION = /\.(?:jks|key|p12|pfx)$/u;
-const PUBLIC_KEY_FILE = /^(?:id_(?:dsa|ecdsa|ed25519|rsa)|.*(?:public[._-]?key|pubkey).*)\.pub$/u;
+const PRIVATE_PEM_FILE = /^(?:key|private)\.pem$/u;
+const PUBLIC_KEY_FILE = /^(?:id_(?:dsa|ecdsa|ed25519|rsa)(?:-cert)?|.*(?:public[._-]?key|pubkey).*)\.pub$/u;
 const CREDENTIAL_NAME = /(?:^|[._-])(?:access[._-]?tokens?|api[._-]?keys?|bearers?|client[._-]?secrets?|cookies?|credentials?|passwords?|passwd|secrets?|tokens?)(?:[._-]|$)/u;
 const SENSITIVE_READ_FILES = new Set([
   '.netrc',
@@ -117,6 +118,7 @@ const SENSITIVE_READ_FILES = new Set([
 const SENSITIVE_READ_DIRECTORIES = new Set([
   '.direnv',
   '.kube',
+  '.openclaw',
   '.ssh',
   'credentials',
   'secrets',
@@ -142,8 +144,9 @@ const SAFE_CONFIG_METADATA_COMPONENTS = new Set([
   'timeoutms',
 ]);
 const SHADOW_DATABASE_FILE = /^(?:g?shadow)(?:-|~|\.(?:bak|backup|old|\d+))?$/u;
-const SSH_HOST_PRIVATE_KEY = /^ssh_host_[^/]+_key$/u;
-const SSH_HOST_PUBLIC_KEY_PATH = /^\/etc\/ssh\/ssh_host_[^/]+_key\.pub$/u;
+const MASTER_PASSWD_FILE = /^master\.passwd(?:-|~|\.(?:bak|backup|old|\d+))?$/u;
+const SSH_HOST_PRIVATE_KEY = /^ssh_host_[^/]+_key(?:-|~|\.(?:bak|backup|old|\d+))?$/u;
+const SSH_HOST_PUBLIC_KEY_PATH = /^\/(?:private\/)?etc\/ssh\/ssh_host_[^/]+_key\.pub$/u;
 const KUBERNETES_CREDENTIAL_CONFIG = /^(?:[^/]*admin|bootstrap-kubelet|cluster|controller-manager|kubelet|scheduler)\.conf$/u;
 
 function isPlainObject(value) {
@@ -370,10 +373,16 @@ function pathHasAmbiguousWindowsAlias(path) {
   return path.split(/[\\/]+/u).some((segment) => segment !== '' && /[ .]$/u.test(segment));
 }
 
+function pathHasWindowsAlternateDataStream(path) {
+  const withoutDrive = /^[a-zA-Z]:/u.test(path) ? path.slice(2) : path;
+  return withoutDrive.includes(':');
+}
+
 function normalizeAbsoluteSystemPath(path) {
   const slashPath = path.replaceAll('\\', '/');
-  if (!slashPath.startsWith('/') || slashPath.startsWith('//')) return null;
-  return pathPosix.normalize(slashPath.replace(/\/{2,}/gu, '/')).toLowerCase();
+  if (!slashPath.startsWith('/')) return null;
+  const rooted = `/${slashPath.replace(/^\/+/u, '').replace(/\/{2,}/gu, '/')}`;
+  return pathPosix.normalize(rooted).toLowerCase();
 }
 
 function targetsSensitiveSystemPath(path) {
@@ -381,22 +390,33 @@ function targetsSensitiveSystemPath(path) {
   if (normalized === null) return false;
   const segments = normalized.split('/').filter(Boolean);
 
-  if (segments[0] === 'etc') {
-    if (segments.length === 2 && SHADOW_DATABASE_FILE.test(segments[1])) return true;
-    if (segments[1] === 'ssh' && SSH_HOST_PRIVATE_KEY.test(segments.at(-1))) return true;
-    if (segments[1] === 'ssl' && segments[2] === 'private') return true;
-    if (segments[1] === 'kubernetes'
+  const etcIndex = segments[0] === 'etc'
+    ? 0
+    : segments[0] === 'private' && segments[1] === 'etc' ? 1 : -1;
+  if (etcIndex >= 0) {
+    const etcSegments = segments.slice(etcIndex);
+    if (etcSegments.length === 2
+      && (SHADOW_DATABASE_FILE.test(etcSegments[1])
+        || MASTER_PASSWD_FILE.test(etcSegments[1]))) return true;
+    if (etcSegments[1] === 'ssh' && SSH_HOST_PRIVATE_KEY.test(etcSegments.at(-1))) return true;
+    if (etcSegments[1] === 'ssl' && etcSegments[2] === 'private') return true;
+    if (etcSegments[1] === 'kubernetes'
       && KUBERNETES_CREDENTIAL_CONFIG.test(segments.at(-1))) return true;
   }
 
-  return segments[0] === 'proc'
-    && (segments[1] === 'self' || /^\d+$/u.test(segments[1]))
-    && ['cmdline', 'environ', 'fd', 'mem'].includes(segments[2]);
+  const isProcessPath = segments[0] === 'proc'
+    && (segments[1] === 'self' || segments[1] === 'thread-self' || /^\d+$/u.test(segments[1]));
+  if (!isProcessPath) return false;
+  if (['cmdline', 'environ', 'fd', 'mem'].includes(segments[2])) return true;
+  return segments[2] === 'root'
+    && segments.length > 3
+    && targetsSensitiveSystemPath(`/${segments.slice(3).join('/')}`);
 }
 
 function isSafeSystemMetadataPath(path) {
   const normalized = normalizeAbsoluteSystemPath(path);
   return normalized === '/etc/passwd'
+    || normalized === '/private/etc/passwd'
     || normalized === '/proc/version'
     || (normalized !== null && SSH_HOST_PUBLIC_KEY_PATH.test(normalized));
 }
@@ -407,7 +427,9 @@ function filenameStem(name) {
 }
 
 function targetsCredentialMaterial(path) {
-  if (pathHasRawTraversal(path) || pathHasAmbiguousWindowsAlias(path)) return true;
+  if (pathHasRawTraversal(path)
+    || pathHasAmbiguousWindowsAlias(path)
+    || pathHasWindowsAlternateDataStream(path)) return true;
   const segments = path
     .replaceAll('\\', '/')
     .split('/')
@@ -422,7 +444,8 @@ function targetsCredentialMaterial(path) {
     || ENVRC_FILE.test(name)
     || SENSITIVE_READ_FILES.has(name)
     || PRIVATE_KEY_FILE.test(name)
-    || PRIVATE_KEY_EXTENSION.test(name)) return true;
+    || PRIVATE_KEY_EXTENSION.test(name)
+    || PRIVATE_PEM_FILE.test(name)) return true;
   if (targetsSensitiveSystemPath(path)) return true;
   if (segments.at(-2) === '.docker' && name === 'config.json') return true;
   if (segments.at(-2) === '.kube' && name === 'config') return true;

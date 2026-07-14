@@ -12,6 +12,7 @@ const SINGLE_DASH_OPTION_PATTERN = /(?:^|\s)-([A-Za-z_][A-Za-z0-9_-]{1,127})/g;
 const URI_USERINFO_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^/\s@]*:[^@\s/]+@/i;
 const CURL_COMMAND_PATTERN = /(?:^|[\\/\s])curl(?:\.exe)?(?=$|[\s;|&])/i;
 const CURL_USER_OPTION_PATTERN = /(?:^|\s)(?:-u(?:(?:[ \t]*=?[ \t]+)|[^ \t;|&]*:[^ \t;|&]+)|--(?:user|proxy-user)(?![A-Za-z0-9_-])(?:[ \t]*=[ \t]*|[ \t]+))/i;
+const SERIALIZED_CONTAINER_PATTERN = /^[\u0009\u000a\u000d\u0020]*[\[{]/u;
 const SECRET_METADATA_SUFFIXES = new Set([
   'file',
   'path',
@@ -74,6 +75,7 @@ const REDACTION_ERROR_MESSAGES = new Set([
   'cannot redact unsupported value',
   'maxStringLength must be a non-negative integer',
 ]);
+const TLS_SECRET_FIELDS = new Set(['ca', 'cert', 'key', 'passphrase']);
 
 function isPlainObject(value) {
   if (value === null || typeof value !== 'object') return false;
@@ -209,6 +211,70 @@ function isOpaqueString(value) {
     || value.includes(TRUNCATED);
 }
 
+function lowerPath(path) {
+  return path.map((part) => typeof part === 'string' ? part.toLowerCase() : part);
+}
+
+function isAuthProfilePath(path) {
+  const normalized = lowerPath(path);
+  return normalized.length >= 2 && normalized.at(-2) === 'profiles';
+}
+
+function isAuthProfilesOAuthPath(path) {
+  const normalized = lowerPath(path).slice(-2);
+  return normalized.length === 2
+    && normalized[0] === 'auth-profiles'
+    && normalized[1] === 'oauth';
+}
+
+function isProviderTlsPath(path) {
+  const normalized = lowerPath(path);
+  const direct = normalized.slice(-5);
+  if (direct.length === 5
+    && direct[0] === 'models'
+    && direct[1] === 'providers'
+    && direct[3] === 'request'
+    && direct[4] === 'tls') return true;
+  const proxy = normalized.slice(-6);
+  return proxy.length === 6
+    && proxy[0] === 'models'
+    && proxy[1] === 'providers'
+    && proxy[3] === 'request'
+    && proxy[4] === 'proxy'
+    && proxy[5] === 'tls';
+}
+
+function isHookMappingPath(path) {
+  const normalized = lowerPath(path).slice(-3);
+  return normalized.length === 3
+    && normalized[0] === 'hooks'
+    && normalized[1] === 'mappings'
+    && normalized[2] === '[]';
+}
+
+function isContextSecretKey(path, key) {
+  const normalizedKey = key.toLowerCase();
+  if (normalizedKey === 'key' && isAuthProfilePath(path)) return true;
+  if (TLS_SECRET_FIELDS.has(normalizedKey) && isProviderTlsPath(path)) return true;
+  return normalizedKey === 'sessionkey' && isHookMappingPath(path);
+}
+
+function serializedJsonRequiresRedaction(value, maxStringLength) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return false;
+  }
+  if (parsed === null || typeof parsed !== 'object') return false;
+  try {
+    const redacted = redactValue(parsed, maxStringLength, new Set(), []);
+    return containsOpaqueValue(redacted, new Set());
+  } catch {
+    return true;
+  }
+}
+
 function redactEnv(value, maxStringLength) {
   const { keys } = assertDataObject(value);
   if (keys.some((key) => redactString(key, maxStringLength) !== key || isOpaqueString(key))) {
@@ -221,18 +287,20 @@ function redactEnv(value, maxStringLength) {
 
 function redactString(value, maxStringLength) {
   const truncated = value.length > maxStringLength;
+  if (truncated && SERIALIZED_CONTAINER_PATTERN.test(value)) return REDACTED;
   const inspectionLimit = maxStringLength + REDACTION_LOOKAHEAD;
   let sanitized = (truncated ? value.slice(0, inspectionLimit) : value)
     .replace(PEM_PRIVATE_KEY_PATTERN, PRIVATE_KEY_REDACTED);
   if (PEM_PRIVATE_KEY_HEADER_PATTERN.test(sanitized)) sanitized = PRIVATE_KEY_REDACTED;
   sanitized = sanitized.replace(BEARER_TOKEN_PATTERN, 'Bearer [REDACTED]');
   if (containsCredentialBinding(sanitized)) return REDACTED;
+  if (!truncated && serializedJsonRequiresRedaction(sanitized, maxStringLength)) return REDACTED;
 
   if (!truncated && sanitized.length <= maxStringLength) return sanitized;
   return `${sanitized.slice(0, maxStringLength)}${TRUNCATED}`;
 }
 
-function redactValue(value, maxStringLength, ancestors) {
+function redactValue(value, maxStringLength, ancestors, path) {
   if (value === null || typeof value === 'boolean') return value;
   if (typeof value === 'string') return redactString(value, maxStringLength);
   if (typeof value === 'number') {
@@ -260,24 +328,31 @@ function redactValue(value, maxStringLength, ancestors) {
         if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
           throw new TypeError('cannot redact unsupported value');
         }
-        result.push(redactValue(descriptor.value, maxStringLength, ancestors));
+        result.push(redactValue(descriptor.value, maxStringLength, ancestors, [...path, '[]']));
       }
       return result;
     }
 
     const { keys, descriptors } = assertDataObject(value);
+    if ((isAuthProfilePath(path) && descriptors.type?.value === 'oauth')
+      || isAuthProfilesOAuthPath(path)) return REDACTED;
     if (keys.some((key) => redactString(key, maxStringLength) !== key || isOpaqueString(key))) {
       return REDACTED;
     }
     const result = {};
     for (const key of keys) {
       let redacted;
-      if (isSecretBearingKey(key)) {
+      if (isSecretBearingKey(key) || isContextSecretKey(path, key)) {
         redacted = REDACTED;
       } else if (key.toLowerCase() === 'env' || key.toLowerCase() === 'headers') {
         redacted = redactEnv(descriptors[key].value, maxStringLength);
       } else {
-        redacted = redactValue(descriptors[key].value, maxStringLength, ancestors);
+        redacted = redactValue(
+          descriptors[key].value,
+          maxStringLength,
+          ancestors,
+          [...path, key],
+        );
       }
       defineValue(result, key, redacted);
     }
@@ -293,7 +368,7 @@ export function redactForJudge(value, options = {}) {
     if (!Number.isInteger(maxStringLength) || maxStringLength < 0) {
       throw new TypeError('maxStringLength must be a non-negative integer');
     }
-    return redactValue(value, maxStringLength, new Set());
+    return redactValue(value, maxStringLength, new Set(), []);
   } catch (error) {
     if (error instanceof TypeError && REDACTION_ERROR_MESSAGES.has(error.message)) throw error;
     throw new TypeError('cannot redact unsupported value');

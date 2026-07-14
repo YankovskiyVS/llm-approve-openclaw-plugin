@@ -65,6 +65,117 @@ test('redacts authoritative OpenClaw secret leaves and opaque value containers',
   assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
+test('redacts context-bound OpenClaw credentials without making generic keys secret', () => {
+  const secret = 'context-matrix-fixture-never-send-u52';
+  const input = {
+    profiles: {
+      default: {
+        type: 'api_key',
+        provider: 'cloudru',
+        key: secret,
+        displayName: 'Cloud.ru work',
+      },
+      oauth: {
+        type: 'oauth',
+        provider: 'openai',
+        access: secret,
+        refresh: secret,
+        expires: 4_102_444_800_000,
+      },
+    },
+    models: {
+      providers: {
+        cloudru: {
+          request: {
+            tls: {
+              ca: secret,
+              cert: secret,
+              key: secret,
+              passphrase: secret,
+              serverName: 'fm.example.invalid',
+            },
+            proxy: {
+              tls: {
+                ca: secret,
+                cert: secret,
+                key: secret,
+                passphrase: secret,
+                insecureSkipVerify: false,
+              },
+            },
+          },
+        },
+      },
+    },
+    hooks: {
+      mappings: [{ id: 'status-hook', sessionKey: secret, action: 'agent' }],
+    },
+    'auth-profiles': {
+      oauth: { access: secret, refresh: secret, expires: 4_102_444_800_000 },
+    },
+    sessionKey: 'agent:main:main',
+    metadata: { key: 'ordinary-sort-label', sortKey: 'created_at' },
+  };
+
+  const result = redactForJudge(input);
+  assert.equal(JSON.stringify(result).includes(secret), false, 'context secret remained');
+  assert.equal(result.profiles.default.key, REDACTED);
+  assert.equal(result.profiles.default.displayName, 'Cloud.ru work');
+  assert.equal(result.profiles.oauth, REDACTED);
+  for (const key of ['ca', 'cert', 'key', 'passphrase']) {
+    assert.equal(result.models.providers.cloudru.request.tls[key], REDACTED, key);
+    assert.equal(result.models.providers.cloudru.request.proxy.tls[key], REDACTED, `proxy.${key}`);
+  }
+  assert.equal(result.models.providers.cloudru.request.tls.serverName, 'fm.example.invalid');
+  assert.equal(result.models.providers.cloudru.request.proxy.tls.insecureSkipVerify, false);
+  assert.equal(result.hooks.mappings[0].sessionKey, REDACTED);
+  assert.equal(result['auth-profiles'].oauth, REDACTED);
+  assert.equal(result.sessionKey, 'agent:main:main');
+  assert.deepEqual(result.metadata, { key: 'ordinary-sort-label', sortKey: 'created_at' });
+});
+
+test('fails closed for serialized context-bound credentials but preserves safe JSON metadata', () => {
+  const secret = 'serialized-context-fixture-never-send-v63';
+  const credentialJson = JSON.stringify({
+    profiles: { default: { key: secret } },
+    models: {
+      providers: {
+        cloudru: { request: { proxy: { tls: { ca: secret, cert: secret, key: secret } } } },
+      },
+    },
+    hooks: { mappings: [{ sessionKey: secret }] },
+  });
+  const oauthJson = JSON.stringify({
+    'auth-profiles': { oauth: { access: secret, refresh: secret } },
+  });
+
+  for (const value of [credentialJson, oauthJson]) {
+    const result = redactForJudge(value);
+    assert.equal(result.includes(secret), false, 'serialized credential remained');
+    assert.equal(result, REDACTED);
+  }
+
+  const safeJson = JSON.stringify({
+    sessionKey: 'agent:main:main',
+    metadata: { key: 'ordinary-sort-label', sortKey: 'created_at' },
+    tls: { serverName: 'public.example.invalid' },
+    profiles: { default: { displayName: 'Public label' } },
+  });
+  assert.equal(redactForJudge(safeJson), safeJson);
+});
+
+test('fails closed before truncating a JSON-looking credential payload', () => {
+  const secret = 'truncated-json-fixture-never-send-w74';
+  const value = JSON.stringify({
+    profiles: { default: { key: secret } },
+    padding: 'x'.repeat(5_000),
+  });
+
+  const result = redactForJudge(value);
+  assert.equal(result.includes(secret), false, 'truncated JSON leaked a credential');
+  assert.equal(result, REDACTED);
+});
+
 test('recursively redacts secret-bearing keys without mutating input', () => {
   const secrets = [
     'token-fixture-7f31',
