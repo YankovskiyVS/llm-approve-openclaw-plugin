@@ -1,6 +1,8 @@
+import { JUDGE_VERDICT_SCHEMA } from './judge-schema.js';
+
 export const PLUGIN_ID = 'llm-action-judge';
 export const MODEL_ID = 'Qwen/Qwen3.5-397B-A17B';
-export const POLICY_VERSION = '2026-07-12.4';
+export const POLICY_VERSION = JUDGE_VERDICT_SCHEMA.properties.policy_version.const;
 export const MIN_CONFIDENCE = 0.8;
 export const CLOUDRU_BASE_URL = 'https://foundation-models.api.cloud.ru/v1';
 export const JUDGE_TIMEOUT_MS = 8_000;
