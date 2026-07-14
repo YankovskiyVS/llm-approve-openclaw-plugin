@@ -173,13 +173,44 @@ test('normalizes validation failures to a generic non-model-controlled error', (
   );
 });
 
+test('derives policy, keys, and enums only from the loaded schema', async () => {
+  const schemaUrl = new URL('../schemas/judge-verdict.schema.json', import.meta.url);
+  const schema = JSON.parse(await readFile(schemaUrl, 'utf8'));
+  const reversedKeys = [...schema.required].reverse();
+  schema.required = reversedKeys;
+  schema.properties = Object.fromEntries(
+    reversedKeys.map((key) => [key, schema.properties[key]]),
+  );
+  schema.properties.policy_version.const = 'schema-derived-test-policy';
+  schema.properties.decision.enum = ['permit', 'refuse', 'escalate'];
+  schema.properties.risk.enum = ['minor', 'major'];
+  schema.properties.authorization.enum = ['absent', 'present'];
+
+  const contract = createJudgeSchemaContract({
+    readSchema() { return JSON.stringify(schema); },
+  });
+
+  assert.deepEqual(contract.schema, schema);
+  assert.equal(contract.policyVersion, schema.properties.policy_version.const);
+  assert.deepEqual(contract.verdictKeys, schema.required);
+  assert.deepEqual(contract.decisions, schema.properties.decision.enum);
+  assert.deepEqual(contract.risks, schema.properties.risk.enum);
+  assert.deepEqual(contract.authorizations, schema.properties.authorization.enum);
+  for (const value of [
+    contract.verdictKeys,
+    contract.decisions,
+    contract.risks,
+    contract.authorizations,
+  ]) {
+    assert.equal(Object.isFrozen(value), true);
+  }
+});
+
 test('contains schema and dependency initialization failures until contract use', async (t) => {
   const schemaUrl = new URL('../schemas/judge-verdict.schema.json', import.meta.url);
   const schemaText = await readFile(schemaUrl, 'utf8');
   const secret = 'schema-initialization-secret-never-print';
 
-  const driftedSchema = JSON.parse(schemaText);
-  driftedSchema.properties.policy_version.const = 'unexpected-bootstrap-policy';
   const cases = [
     ['schema read', {
       readSchema() { throw new Error(secret); },
@@ -199,9 +230,6 @@ test('contains schema and dependency initialization failures until contract use'
         };
       },
     }],
-    ['bootstrap vocabulary drift', {
-      readSchema() { return JSON.stringify(driftedSchema); },
-    }],
   ];
 
   for (const [name, dependencies] of cases) {
@@ -211,6 +239,16 @@ test('contains schema and dependency initialization failures until contract use'
         contract = createJudgeSchemaContract(dependencies);
       });
       assert.equal(contract.schema, null);
+      assert.equal(contract.policyVersion, null);
+      for (const value of [
+        contract.verdictKeys,
+        contract.decisions,
+        contract.risks,
+        contract.authorizations,
+      ]) {
+        assert.deepEqual(value, []);
+        assert.equal(Object.isFrozen(value), true);
+      }
       for (const useContract of [
         () => contract.validateJudgeVerdict(verdict()),
         () => contract.createJudgeResponseFormat(),

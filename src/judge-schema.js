@@ -5,20 +5,7 @@ const INVALID_VERDICT_ERROR = 'invalid judge verdict';
 const CONTRACT_UNAVAILABLE_ERROR = 'judge verdict contract unavailable';
 const schemaUrl = new URL('../schemas/judge-verdict.schema.json', import.meta.url);
 const require = createRequire(import.meta.url);
-
-export const JUDGE_POLICY_VERSION = '2026-07-14.1';
-export const JUDGE_VERDICT_KEYS = Object.freeze([
-  'policy_version',
-  'action_hash',
-  'decision',
-  'risk',
-  'authorization',
-  'confidence',
-  'rationale',
-]);
-export const JUDGE_DECISIONS = Object.freeze(['allow', 'deny', 'review']);
-export const JUDGE_RISKS = Object.freeze(['low', 'medium', 'high', 'critical']);
-export const JUDGE_AUTHORIZATIONS = Object.freeze(['unknown', 'low', 'medium', 'high']);
+const EMPTY_VOCABULARY = Object.freeze([]);
 
 function deepFreeze(value) {
   if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value;
@@ -32,18 +19,31 @@ function sameValues(actual, expected) {
     && actual.every((value, index) => value === expected[index]);
 }
 
-function matchesBootstrapVocabulary(schema) {
-  try {
-    const properties = schema.properties;
-    return sameValues(schema.required, JUDGE_VERDICT_KEYS)
-      && sameValues(Object.keys(properties), JUDGE_VERDICT_KEYS)
-      && properties.policy_version.const === JUDGE_POLICY_VERSION
-      && sameValues(properties.decision.enum, JUDGE_DECISIONS)
-      && sameValues(properties.risk.enum, JUDGE_RISKS)
-      && sameValues(properties.authorization.enum, JUDGE_AUTHORIZATIONS);
-  } catch {
-    return false;
+function frozenStrings(values) {
+  if (!Array.isArray(values)
+    || values.length === 0
+    || values.some((value) => typeof value !== 'string' || value === '')
+    || new Set(values).size !== values.length) throw new TypeError(CONTRACT_UNAVAILABLE_ERROR);
+  return Object.freeze([...values]);
+}
+
+function deriveVocabulary(schema) {
+  const properties = schema.properties;
+  const verdictKeys = frozenStrings(schema.required);
+  if (!sameValues(Object.keys(properties), verdictKeys)) {
+    throw new TypeError(CONTRACT_UNAVAILABLE_ERROR);
   }
+  const policyVersion = properties.policy_version.const;
+  if (typeof policyVersion !== 'string' || policyVersion === '') {
+    throw new TypeError(CONTRACT_UNAVAILABLE_ERROR);
+  }
+  return Object.freeze({
+    policyVersion,
+    verdictKeys,
+    decisions: frozenStrings(properties.decision.enum),
+    risks: frozenStrings(properties.risk.enum),
+    authorizations: frozenStrings(properties.authorization.enum),
+  });
 }
 
 function unavailableContract() {
@@ -52,6 +52,11 @@ function unavailableContract() {
   }
   return Object.freeze({
     schema: null,
+    policyVersion: null,
+    verdictKeys: EMPTY_VOCABULARY,
+    decisions: EMPTY_VOCABULARY,
+    risks: EMPTY_VOCABULARY,
+    authorizations: EMPTY_VOCABULARY,
     validateJudgeVerdict: unavailable,
     createJudgeResponseFormat: unavailable,
   });
@@ -75,8 +80,6 @@ export function createJudgeSchemaContract(dependencies = {}) {
     }
 
     const schema = deepFreeze(JSON.parse(readSchema()));
-    if (!matchesBootstrapVocabulary(schema)) return unavailableContract();
-
     const Ajv = loadAjv();
     if (typeof Ajv !== 'function') return unavailableContract();
     const ajv = new Ajv({
@@ -89,9 +92,11 @@ export function createJudgeSchemaContract(dependencies = {}) {
     });
     const validate = ajv.compile(schema);
     if (typeof validate !== 'function') return unavailableContract();
+    const vocabulary = deriveVocabulary(schema);
 
     return Object.freeze({
       schema,
+      ...vocabulary,
       validateJudgeVerdict(value) {
         try {
           if (validate(value)) return;
@@ -119,6 +124,11 @@ export function createJudgeSchemaContract(dependencies = {}) {
 const defaultContract = createJudgeSchemaContract();
 
 export const JUDGE_VERDICT_SCHEMA = defaultContract.schema;
+export const JUDGE_POLICY_VERSION = defaultContract.policyVersion;
+export const JUDGE_VERDICT_KEYS = defaultContract.verdictKeys;
+export const JUDGE_DECISIONS = defaultContract.decisions;
+export const JUDGE_RISKS = defaultContract.risks;
+export const JUDGE_AUTHORIZATIONS = defaultContract.authorizations;
 
 export function validateJudgeVerdict(value) {
   return defaultContract.validateJudgeVerdict(value);
