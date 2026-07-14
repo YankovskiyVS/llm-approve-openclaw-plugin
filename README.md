@@ -30,9 +30,15 @@ ENV или `openclaw.json`.
 platform/service manager. Обычный shell `export` не передаётся launchd/systemd
 service. Foreground smoke описан в [DEPLOYMENT.md](DEPLOYMENT.md).
 
+Plugin id `llm-action-judge` также должен входить в `plugins.allow`. На уже
+настроенном host добавьте id к существующему списку, не заменяя trusted ids
+других plugins. Команда ниже подходит для новой выделенной OpenClaw node, где
+judge — единственный non-bundled plugin.
+
 ```bash
 shasum -a 256 -c openclaw-llm-action-judge-0.4.0.tgz.sha256
 openclaw plugins install ./openclaw-llm-action-judge-0.4.0.tgz
+openclaw config set plugins.allow '["llm-action-judge"]' --strict-json
 openclaw config set plugins.entries.llm-action-judge.hooks.allowConversationAccess true --strict-json
 openclaw plugins registry --refresh
 openclaw config validate

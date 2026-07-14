@@ -63,8 +63,15 @@ configuration.
 Следующий restart предполагает, что managed gateway environment уже обновлён по
 шагу 2.
 
+До restart добавьте `llm-action-judge` в `plugins.allow`. Если allowlist уже
+существует, сохраните все trusted ids других plugins и выполните merge через
+platform config management. Не заменяйте рабочий список одной строкой. Для
+новой выделенной node, где judge — единственный non-bundled plugin, подходит
+следующая команда:
+
 ```bash
 openclaw plugins install ./openclaw-llm-action-judge-0.4.0.tgz
+openclaw config set plugins.allow '["llm-action-judge"]' --strict-json
 openclaw config set plugins.entries.llm-action-judge.hooks.allowConversationAccess true --strict-json
 openclaw plugins registry --refresh
 openclaw config validate
@@ -174,6 +181,8 @@ openclaw gateway health
 
 - `setup failed`: проверьте unknown/blank ENV, exact base URL, key grammar,
   timeout и audit path.
+- warning `plugins.allow is empty`: добавьте `llm-action-judge` к существующему
+  allowlist, сохранив trusted ids других plugins.
 - HTTP 401/403: проверьте доступ key к fixed model.
 - timeout: endpoint остаётся fail-closed; сначала проверьте proxy/no_proxy и
   latency, не увеличивайте deadline вслепую.

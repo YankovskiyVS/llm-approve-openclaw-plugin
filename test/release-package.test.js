@@ -288,6 +288,9 @@ test('deployment docs distinguish managed service ENV and safe legacy rollback',
   assert.doesNotMatch(deployment, /export OPENCLAW_JUDGE_/u);
   assert.match(deployment, /service manager/u);
   assert.match(deployment, /foreground gateway/u);
+  assert.match(readme, /plugins\.allow[\s\S]*llm-action-judge/u);
+  assert.match(deployment, /plugins\.allow[\s\S]*llm-action-judge/u);
+  assert.match(deployment, /сохраните все trusted ids других plugins/u);
   assert.match(
     deployment,
     /config set plugins\.entries\.llm-action-judge\.config '\{"mode":"supervised","enforcement":"shadow"\}' --strict-json/u,
