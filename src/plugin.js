@@ -1,10 +1,10 @@
+import { types as utilTypes } from 'node:util';
 import { createAction, createJudgeEnvelope } from './action.js';
 import { buildAuditEvent, createAuditWriter } from './audit.js';
 import {
   APPROVAL_TIMEOUT_MS,
   MIN_CONFIDENCE,
   PLUGIN_ID,
-  POLICY_VERSION,
 } from './constants.js';
 import { createContextStore } from './context-store.js';
 import {
@@ -15,6 +15,11 @@ import {
   parseJudgeResponse,
 } from './decision.js';
 import { resolveRuntimeSettings } from './environment.js';
+import {
+  JUDGE_DECISIONS,
+  JUDGE_VERDICT_KEYS,
+  validateJudgeVerdict,
+} from './judge-schema.js';
 import { createJudgeClient } from './judge-client.js';
 
 const PLUGIN_NAME = 'LLM Action Judge';
@@ -28,21 +33,9 @@ const REGISTERED_MESSAGE = 'LLM action judge registered';
 const FAILURE_REASON = 'judge evaluation failed';
 const SAFE_CONFIG = Object.freeze({ mode: 'supervised', enforcement: 'enforce' });
 const LOG_LEVEL_RANK = Object.freeze({ silent: -1, error: 0, warn: 1, info: 2 });
-const OUTCOMES = new Set(['allow', 'deny', 'review']);
-const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
+const OUTCOMES = new Set(JUDGE_DECISIONS);
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
-const VERDICT_KEYS = [
-  'policy_version',
-  'action_hash',
-  'decision',
-  'risk',
-  'authorization',
-  'confidence',
-  'rationale',
-];
-const DECISIONS = new Set(['allow', 'deny', 'review']);
-const RISKS = new Set(['low', 'medium', 'high', 'critical']);
-const AUTHORIZATIONS = new Set(['unknown', 'low', 'medium', 'high']);
+const VERDICT_KEY_SET = new Set(JUDGE_VERDICT_KEYS);
 
 function readData(source, key) {
   try {
@@ -187,41 +180,28 @@ function getStoredPrompt(store, runId) {
 
 function verdictSnapshot(value, expectedHash) {
   try {
-    if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+    if (value === null
+      || typeof value !== 'object'
+      || Array.isArray(value)
+      || utilTypes.isProxy(value)) return null;
     const prototype = Object.getPrototypeOf(value);
-    if ((prototype !== Object.prototype && prototype !== null)
-      || Object.getOwnPropertySymbols(value).length !== 0) return null;
-    const names = Object.getOwnPropertyNames(value);
-    if (names.length !== VERDICT_KEYS.length
-      || !VERDICT_KEYS.every((key) => names.includes(key))) {
+    if (prototype !== Object.prototype && prototype !== null) return null;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== JUDGE_VERDICT_KEYS.length
+      || keys.some((key) => typeof key !== 'string' || !VERDICT_KEY_SET.has(key))) {
       return null;
     }
     const snapshot = {};
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    for (const key of VERDICT_KEYS) {
-      const descriptor = descriptors[key];
+    for (const key of JUDGE_VERDICT_KEYS) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
         return null;
       }
       snapshot[key] = descriptor.value;
     }
-    if (snapshot.policy_version !== POLICY_VERSION
-      || typeof expectedHash !== 'string'
-      || !HASH_PATTERN.test(expectedHash)
-      || typeof snapshot.action_hash !== 'string'
-      || !HASH_PATTERN.test(snapshot.action_hash)
+    validateJudgeVerdict(snapshot);
+    if (typeof expectedHash !== 'string'
       || snapshot.action_hash !== expectedHash
-      || typeof snapshot.decision !== 'string'
-      || !DECISIONS.has(snapshot.decision)
-      || typeof snapshot.risk !== 'string'
-      || !RISKS.has(snapshot.risk)
-      || typeof snapshot.authorization !== 'string'
-      || !AUTHORIZATIONS.has(snapshot.authorization)
-      || typeof snapshot.confidence !== 'number'
-      || !Number.isFinite(snapshot.confidence)
-      || snapshot.confidence < 0
-      || snapshot.confidence > 1
-      || typeof snapshot.rationale !== 'string'
       || !snapshot.rationale.trim()
       || snapshot.rationale.length > 500
       || CONTROL_PATTERN.test(snapshot.rationale)) return null;

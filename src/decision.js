@@ -4,25 +4,16 @@ import {
   APPROVAL_TIMEOUT_MS,
   MIN_CONFIDENCE,
   PLUGIN_ID,
-  POLICY_VERSION,
 } from './constants.js';
+import {
+  JUDGE_DECISIONS,
+  validateJudgeVerdict,
+} from './judge-schema.js';
 import { containsOpaqueData } from './redact.js';
 
 const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
-const RESPONSE_KEYS = [
-  'policy_version',
-  'action_hash',
-  'decision',
-  'risk',
-  'authorization',
-  'confidence',
-  'rationale',
-];
-const RESPONSE_KEY_SET = new Set(RESPONSE_KEYS);
-const DECISIONS = new Set(['allow', 'deny', 'review']);
-const RISKS = new Set(['low', 'medium', 'high', 'critical']);
-const AUTHORIZATIONS = new Set(['unknown', 'low', 'medium', 'high']);
+const DECISION_SET = new Set(JUDGE_DECISIONS);
 const INVALID_RESPONSE_REASON = 'invalid judge response';
 const DENY_BLOCK_REASON = 'LLM action judge denied the tool call';
 const REVIEW_BLOCK_REASON = 'LLM action judge review required';
@@ -171,12 +162,6 @@ function hasDuplicateTopLevelKeys(source) {
   return true;
 }
 
-function hasExactKeys(value) {
-  const keys = Object.keys(value);
-  return keys.length === RESPONSE_KEYS.length
-    && keys.every((key) => RESPONSE_KEY_SET.has(key));
-}
-
 export function parseJudgeResponse(text, options = {}) {
   try {
     const expectedHash = options?.expectedHash;
@@ -187,30 +172,13 @@ export function parseJudgeResponse(text, options = {}) {
 
     const source = text.trim();
     if (!source.startsWith('{') || !source.endsWith('}')) return invalidResponse();
+    if (hasDuplicateTopLevelKeys(source)) return invalidResponse();
 
     const parsed = JSON.parse(source);
     if (!isPlainObject(parsed)) return invalidResponse();
-    if (hasDuplicateTopLevelKeys(source) || !hasExactKeys(parsed)) {
-      return invalidResponse();
-    }
-    if (typeof parsed.policy_version !== 'string'
-      || parsed.policy_version !== POLICY_VERSION) return invalidResponse();
-    if (typeof parsed.action_hash !== 'string'
-      || !HASH_PATTERN.test(parsed.action_hash)
-      || parsed.action_hash !== expectedHash) return invalidResponse();
-    if (typeof parsed.decision !== 'string'
-      || !DECISIONS.has(parsed.decision)) return invalidResponse();
-    if (typeof parsed.risk !== 'string' || !RISKS.has(parsed.risk)) {
-      return invalidResponse();
-    }
-    if (typeof parsed.authorization !== 'string'
-      || !AUTHORIZATIONS.has(parsed.authorization)) return invalidResponse();
-    if (typeof parsed.confidence !== 'number'
-      || !Number.isFinite(parsed.confidence)
-      || parsed.confidence < 0
-      || parsed.confidence > 1) return invalidResponse();
-    if (typeof parsed.rationale !== 'string'
-      || !parsed.rationale.trim()
+    validateJudgeVerdict(parsed);
+    if (parsed.action_hash !== expectedHash) return invalidResponse();
+    if (!parsed.rationale.trim()
       || parsed.rationale.length > 500
       || CONTROL_PATTERN.test(parsed.rationale)) return invalidResponse();
 
@@ -221,7 +189,7 @@ export function parseJudgeResponse(text, options = {}) {
 }
 
 export function normalizeVerdict(parsed) {
-  if (!isPlainObject(parsed) || !DECISIONS.has(parsed.decision)) {
+  if (!isPlainObject(parsed) || !DECISION_SET.has(parsed.decision)) {
     return { kind: 'failure', reason: INVALID_RESPONSE_REASON };
   }
 

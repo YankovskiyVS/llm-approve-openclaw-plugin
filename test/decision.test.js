@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   APPROVAL_TIMEOUT_MS,
   PLUGIN_ID,
@@ -272,6 +273,35 @@ test('parseJudgeResponse rejects duplicate keys including escaped aliases', () =
 
   assertInvalid(duplicate);
   assertInvalid(escapedDuplicate);
+});
+
+test('parseJudgeResponse rejects duplicate keys before parsing the full object', () => {
+  const tail = `"risk":"low","authorization":"high","confidence":0.98,"rationale":"ok"}`;
+  const duplicate = `{"policy_version":"${POLICY_VERSION}","action_hash":"${EXPECTED_HASH}","decision":"allow","decision":"deny",${tail}`;
+  const originalParse = JSON.parse;
+  let parsedFullObject = false;
+
+  JSON.parse = function observedParse(source, ...args) {
+    if (typeof source === 'string' && source.trimStart().startsWith('{')) {
+      parsedFullObject = true;
+    }
+    return Reflect.apply(originalParse, this, [source, ...args]);
+  };
+  try {
+    assertInvalid(duplicate);
+  } finally {
+    JSON.parse = originalParse;
+  }
+
+  assert.equal(parsedFullObject, false);
+});
+
+test('parseJudgeResponse delegates the portable verdict contract to the shared validator', async () => {
+  const source = await readFile(new URL('../src/decision.js', import.meta.url), 'utf8');
+
+  assert.match(source, /from '\.\/judge-schema\.js';/u);
+  assert.match(source, /validateJudgeVerdict\(parsed\);/u);
+  assert.doesNotMatch(source, /const RESPONSE_KEYS\s*=|const DECISIONS\s*=\s*new Set\(\[|const RISKS\s*=|const AUTHORIZATIONS\s*=/u);
 });
 
 test('parseJudgeResponse rejects wrong field types including boolean confidence', () => {

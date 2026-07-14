@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import defaultPlugin, {
   createActionJudgePlugin as createActionJudgePluginFromIndex,
 } from '../index.js';
@@ -675,6 +676,15 @@ test('injected parser cannot allow an independently invalid seven-field verdict'
     ['wrong policy type', ({ expectedHash }) => parsedVerdict(expectedHash, { policy_version: 1 })],
     ['wrong hash type', ({ expectedHash }) => parsedVerdict(expectedHash, { action_hash: { expectedHash } })],
     ['wrong rationale type', ({ expectedHash }) => parsedVerdict(expectedHash, { rationale: true })],
+    ['missing field', ({ expectedHash }) => {
+      const verdict = parsedVerdict(expectedHash);
+      delete verdict.authorization;
+      return verdict;
+    }],
+    ['additional field', ({ expectedHash }) => ({
+      ...parsedVerdict(expectedHash),
+      extra: 'not in the contract',
+    })],
     ['symbol key', ({ expectedHash }) => {
       const verdict = parsedVerdict(expectedHash);
       verdict[Symbol('hidden')] = 'extra';
@@ -706,6 +716,71 @@ test('injected parser cannot allow an independently invalid seven-field verdict'
       assert.equal(harness.auditEvents[0].outcome, 'failure');
     });
   }
+});
+
+test('plugin snapshots use schema-derived keys and the shared validator', async () => {
+  const source = await readFile(new URL('../src/plugin.js', import.meta.url), 'utf8');
+
+  assert.match(source, /from '\.\/judge-schema\.js';/u);
+  assert.match(source, /validateJudgeVerdict\(snapshot\);/u);
+  assert.doesNotMatch(source, /const VERDICT_KEYS\s*=|const DECISIONS\s*=\s*new Set\(\[|const RISKS\s*=|const AUTHORIZATIONS\s*=/u);
+});
+
+test('injected parser cannot pass a proxy or accessor verdict to the safety gate', async (t) => {
+  function parsedVerdict(expectedHash) {
+    return {
+      policy_version: POLICY_VERSION,
+      action_hash: expectedHash,
+      decision: 'allow',
+      risk: 'low',
+      authorization: 'high',
+      confidence: 0.99,
+      rationale: 'The exact requested action is authorized.',
+    };
+  }
+
+  let getterCalls = 0;
+  const cases = [
+    ['proxy', ({ expectedHash }) => new Proxy(parsedVerdict(expectedHash), {
+      get() {
+        getterCalls += 1;
+        throw new Error(PROMPT_SECRET);
+      },
+    })],
+    ['accessor', ({ expectedHash }) => {
+      const verdict = parsedVerdict(expectedHash);
+      Object.defineProperty(verdict, 'rationale', {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          throw new Error(PROMPT_SECRET);
+        },
+      });
+      return verdict;
+    }],
+  ];
+
+  for (const [name, makeVerdict] of cases) {
+    await t.test(name, async () => {
+      const harness = setup({
+        pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+        deps: {
+          parseJudgeResponse(_text, options) {
+            return { ok: true, verdict: makeVerdict(options) };
+          },
+        },
+      });
+      capturePrompt(harness);
+      const call = callData();
+
+      const result = await harness.beforeTool(call.event, call.ctx);
+
+      assertBlocked(result);
+      assert.equal(harness.auditEvents[0].outcome, 'failure');
+      assert.equal(JSON.stringify(harness.auditEvents[0]).includes(PROMPT_SECRET), false);
+    });
+  }
+  assert.equal(getterCalls, 0);
 });
 
 test('hostile normalizer cannot rewrite a frozen validated deny verdict into allow', async () => {
