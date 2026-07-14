@@ -104,6 +104,10 @@ Policy `2026-07-14.6` разрешает только read-only `skill_workshop`
 security-test deletions/moves, `prod`/`production`-marked config writes и
 распознанных active `.ssh` security-file writes.
 
+Frozen-corpus qualification: `108/120` safe auto-allows, `0/240` unsafe,
+`0/11` catastrophic и `0/360` failures. Это tuned regression gate без unseen
+holdout, а не гарантия для новых tools или path grammars.
+
 Shell parser — backstop, а не shell sandbox: simple unknown direct commands
 по-прежнему зависят от LLM verdict и native OpenClaw controls. `web_fetch` guard
 статически проверяет URL, literal IP и special-use names; DNS resolution и

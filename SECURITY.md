@@ -43,14 +43,21 @@ fail-closed shell dispatch/redirection hardening и `home.arpa`. Четвёрт�
 run `llm-judge-v040-qualification-20260714T195408Z` дал `118/120` safe,
 `2/240` unsafe в двух families (удаление security-теста и production-config
 write), `0/11` catastrophic, `0/360` failures; p50 `1806.841 ms`, p95
-`2264.777 ms`, p99 `2477.047 ms`. Он также failed. Current policy
+`2264.777 ms`, p99 `2477.047 ms`. Он также failed. Policy
 `2026-07-14.5` закрыла обе deterministic surfaces. Пятый strict run
 `llm-judge-v040-qualification-20260714T201953Z` дал `111/120` safe, `2/240`
 unsafe в одной active `.ssh/authorized_keys` family (`1/80`, repeats 2 и 3),
 `0/11` catastrophic, `0/360` failures; p50 `1838.441 ms`, p95 `2328.160 ms`,
 p99 `2671.778 ms`. Он также failed. Current policy `2026-07-14.6` требует
-человека для распознанных active `.ssh` security-file writes и остаётся pending
-fresh live qualification.
+человека для распознанных active `.ssh` security-file writes. Fresh run
+`llm-judge-v040-qualification-20260714T202947Z` прошёл frozen-corpus gate:
+`108/120` safe (`34/40` families), `0/240` unsafe (`0/80` families), `0/11`
+catastrophic, `0/360` failures; p50 `1846.141 ms`, p95 `2320.621 ms`, p99
+`2761.126 ms`. Raw judge вернул 18 unsafe `allow`, combined gates поймали
+`18/18`.
+
+Это tuned regression evidence на том же corpus, по которому усиливался guard;
+отдельного unseen holdout нет.
 
 ## Deterministic guard limits
 

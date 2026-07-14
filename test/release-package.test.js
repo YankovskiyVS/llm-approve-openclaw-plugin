@@ -252,7 +252,7 @@ test('release docs state the v0.4 structured-output contract and historical evid
   assert.match(security, /fallback[^\n]*json_object[^\n]*отсутств/iu);
   assert.match(deployment, /releases\/v0\.4\.0/u);
   assert.match(deployment, /0\.4\.0[^\n]*0\.3\.0/u);
-  assert.match(rnd, /pending fresh qualification/iu);
+  assert.match(rnd, /Successful sixth strict qualification/iu);
   assert.match(rnd, /2026-07-14\.1[\s\S]*release-blocker/iu);
   assert.match(rnd, /112\/120[\s\S]*9\/240[\s\S]*5\/80[\s\S]*0\/11/iu);
   assert.match(rnd, /p50[\s\S]*1\.912[\s\S]*p95[\s\S]*4\.720[\s\S]*p99[\s\S]*6\.643/iu);
@@ -268,10 +268,14 @@ test('release docs state the v0.4 structured-output contract and historical evid
   assert.match(rnd, /2026-07-14\.5[\s\S]*release-blocker/iu);
   assert.match(rnd, /111\/120[\s\S]*2\/240[\s\S]*1\/80[\s\S]*0\/11/iu);
   assert.match(rnd, /p50[\s\S]*1838\.441[\s\S]*p95[\s\S]*2328\.160[\s\S]*p99[\s\S]*2671\.778/iu);
+  assert.match(rnd, /108\/120[\s\S]*0\/240[\s\S]*0\/80[\s\S]*0\/11/iu);
+  assert.match(rnd, /p50[\s\S]*1846\.141[\s\S]*p95[\s\S]*2320\.621[\s\S]*p99[\s\S]*2761\.126/iu);
+  assert.match(rnd, /18\/18/iu);
+  assert.match(rnd, /unseen holdout/iu);
   assert.match(security, /DNS resolution[\s\S]*native OpenClaw SSRF/iu);
   assert.match(rnd, /destructive_command_guard/iu);
   assert.match(rnd, /fail-open[\s\S]*default-allow/iu);
-  assert.match(rnd, /historical baseline 0\.2\.0\/0\.3\.0/iu);
+  assert.match(rnd, /historical\s+baseline 0\.2\.0\/0\.3\.0/iu);
   assert.match(changelog, /## 0\.4\.0 — 2026-07-14/u);
 });
 

@@ -128,9 +128,15 @@ policy `2026-07-14.1` дала `112/120` safe и `9/240` unsafe, а policy
 `118/120` safe, но пропустила `2/240` unsafe в двух других families: удаление
 security-теста и правка production config. Policy `2026-07-14.5` закрыла обе
 surfaces, но новый run дал `111/120` safe и `2/240` unsafe в active
-`.ssh/authorized_keys` family. Current policy `2026-07-14.6` закрывает active
-recognized active SSH security-file writes, но имеет статус **pending fresh live
-qualification**.
+`.ssh/authorized_keys` family. Current policy `2026-07-14.6` закрывает
+распознанные active `.ssh` security-file writes. Fresh run
+`llm-judge-v040-qualification-20260714T202947Z` прошёл release-gate: `108/120`
+safe auto-allows (`34/40` families), `0/240` unsafe (`0/80` families), `0/11`
+catastrophic и `0/360` failures; p50 `1846.141 ms`, p95 `2320.621 ms`, p99
+`2761.126 ms`.
+
+Это tuned frozen-corpus qualification, а не unseen holdout: результаты нельзя
+переносить на произвольные новые tools и path grammars без отдельного eval.
 
 Подробности: [RND.md](RND.md).
 

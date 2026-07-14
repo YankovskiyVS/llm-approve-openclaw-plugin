@@ -36,14 +36,15 @@ dependency; OpenClaw peer помечен optional для npm и связывае
 
 ## Current qualification boundary
 
-Статус safety metrics 0.4.0: **pending fresh qualification**. Provider-constrained
-generation и новая policy могут изменить решения fixed model, поэтому старые
-`117/120` и `0/240` — только **historical baseline 0.2.0/0.3.0** с policy
-`2026-07-12.4` и `json_object`. Их нельзя выдавать за результат 0.4.0.
+Статус safety metrics 0.4.0: policy `2026-07-14.6` прошла frozen-corpus
+qualification ниже. Старые `117/120` и `0/240` остаются только **historical
+baseline 0.2.0/0.3.0** с policy `2026-07-12.4` и `json_object`; их нельзя
+выдавать за результат 0.4.0.
 
-До публикации нужен новый frozen-corpus run policy `2026-07-14.6`; source tests,
-packaged runtime smoke и live one-response Structured Output probe не заменяют
-model qualification.
+Qualification не является unseen holdout: deterministic guard последовательно
+дорабатывался по ошибкам на этом же 120-case corpus. Она доказывает regression
+gate для зафиксированного набора, но не generalization на новые tools, path
+grammars или threat families.
 
 ## Failed first strict qualification, pre-hardening policy 2026-07-14.1
 
@@ -144,7 +145,26 @@ attempts**:
 Оба пропуска относятся к active `~/.ssh/authorized_keys` write,
 repeats 2 и 3. Поэтому `.5` также является release-blocker. Policy
 `2026-07-14.6` добавляет deterministic review для распознанных active `.ssh`
-security-file writes и остаётся **pending fresh live qualification**.
+security-file writes.
+
+## Successful sixth strict qualification, policy 2026-07-14.6
+
+Fresh live run сохранён в artifact
+`llm-judge-v040-qualification-20260714T202947Z` и зафиксировал **120 cases / 360
+attempts**:
+
+- safe executed: **108/120** (`34/40` safe families);
+- unsafe auto-allow: **0/240**;
+- unsafe MUST_BLOCK families: **0/80**;
+- catastrophic unsafe families: **0/11**;
+- failures: **0/360**;
+- latency: p50 **1846.141 ms**, p95 **2320.621 ms**, p99 **2761.126 ms**;
+- raw judge: **18** unsafe `allow` attempts, combined semantic/local gates
+  понизили или заблокировали все **18/18**.
+
+Этот run прошёл release-gate для frozen corpus. Он остаётся tuned regression
+evidence без отдельного unseen holdout; новые tool surfaces требуют нового
+corpus review и qualification.
 
 Shell parser здесь является bounded deterministic backstop, а не shell sandbox.
 Неоднозначный dispatch/redirection понижается fail-closed, но простые неизвестные

@@ -68,7 +68,13 @@
   `2/240` unsafe в active `.ssh/authorized_keys` family (`1/80`, repeats 2 и
   3), `0/11` catastrophic, `0/360` failures, p50 `1838.441 ms`, p95
   `2328.160 ms`, p99 `2671.778 ms` и также стал release-blocker. Current policy
-  `2026-07-14.6` остаётся pending fresh live qualification.
+  `2026-07-14.6` прошла fresh frozen-corpus qualification: artifact
+  `llm-judge-v040-qualification-20260714T202947Z`, `108/120` safe (`34/40`
+  families), `0/240` unsafe (`0/80` families), `0/11` catastrophic, `0/360`
+  failures, p50 `1846.141 ms`, p95 `2320.621 ms`, p99 `2761.126 ms`. Raw judge
+  вернул 18 unsafe `allow`; combined gates поймали `18/18`.
+- Финальный run является tuned regression evidence на том же corpus, по которому
+  усиливался guard; unseen holdout отсутствует.
 - Shell parser остаётся bounded deterministic backstop, а не shell sandbox;
   simple unknown direct commands зависят от LLM/native controls. Web guard
   статически проверяет URL/IP/special-use names, а DNS resolution и каждый
