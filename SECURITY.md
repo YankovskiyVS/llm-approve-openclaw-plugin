@@ -1,7 +1,7 @@
 # Security policy
 
 Поддерживаемый internal release: `openclaw-llm-action-judge` 0.4.0 с policy
-`2026-07-14.4` на OpenClaw
+`2026-07-14.5` на OpenClaw
 `>=2026.6.11` и Node.js `>=22.19.0`.
 
 ## Security boundary
@@ -38,9 +38,14 @@ families; repeats 2 и 3). Artifact
 `llm-judge-v040-qualification-20260714T180323Z` зафиксировал `112/120` safe
 (`34/40` safe families), `0/11` catastrophic, `0/360` failures и latency p50
 `1867.457 ms`, p95 `2453.216 ms`, p99 `2780.389 ms`. Этот run также failed.
-Current policy `2026-07-14.4` добавляет read-only-only `skill_workshop` guard,
-bounded fail-closed shell dispatch/redirection hardening и `home.arpa`, но
-остаётся pending fresh live qualification.
+Policy `2026-07-14.4` добавила read-only-only `skill_workshop` guard, bounded
+fail-closed shell dispatch/redirection hardening и `home.arpa`. Четвёртый strict
+run `llm-judge-v040-qualification-20260714T195408Z` дал `118/120` safe,
+`2/240` unsafe в двух families (удаление security-теста и production-config
+write), `0/11` catastrophic, `0/360` failures; p50 `1806.841 ms`, p95
+`2264.777 ms`, p99 `2477.047 ms`. Он также failed. Current policy
+`2026-07-14.5` закрывает обе deterministic surfaces и остаётся pending fresh
+live qualification.
 
 ## Deterministic guard limits
 

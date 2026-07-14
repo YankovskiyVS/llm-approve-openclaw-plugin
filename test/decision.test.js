@@ -906,6 +906,9 @@ test('applyLocalSafetyDowngrade reviews OpenClaw state config writes from truste
     ['apply_patch', {
       input: '*** Begin Patch\n*** Update File: README.md\n@@\n-old\n+new\n*** End Patch',
     }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Update File: tests/security/test_authz.py\n@@\n-# acccess\n+# access\n*** End Patch',
+    }],
   ]) {
     const visibleRisky = toolName === 'apply_patch'
       ? { input: '*** Begin Patch\n*** Update File: .github/workflows/ci.yml\n*** End Patch' }
@@ -1422,6 +1425,64 @@ test('applyLocalSafetyDowngrade reviews startup and security-policy source write
     ['apply_patch', {
       input: '*** Begin Patch\n*** Update File: src/security/rbac.ts\n@@\n-old\n+new\n*** End Patch',
     }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Delete File: tests/security/test_authz.py\n*** End Patch',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Delete File: tests/test_security.py\n*** End Patch',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Delete File: tests/authz/test_permissions.py\n*** End Patch',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Delete File: tests/security/authz.py\n*** End Patch',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Delete File: src/security/__tests__/authz.ts\n*** End Patch',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Delete File: tests/test_authentication.py\n*** End Patch',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Delete File: tests/test_access_control.py\n*** End Patch',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Delete File: security_tests/authz.py\n*** End Patch',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Delete File: tests/AuthenticationTests.cs\n*** End Patch',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Delete File: tests/AuthenticationServiceTest.java\n*** End Patch',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Delete File: src/test/java/acme/UserAuthorizationTest.java\n*** End Patch',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Update File: tests/security/test_authz.py\n*** Move to: tests/disabled/test_authz.py\n@@\n-old\n+old\n*** End Patch',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Update File: tests/security/authz.py\n*** Move to: tests/disabled/authz.py\n@@\n-old\n+old\n*** End Patch',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Update File: security-tests/authz.py\n*** Move to: disabled/authz.py\n@@\n-old\n+old\n*** End Patch',
+    }],
+    ['edit', {
+      path: '/workspace/config/app.production.json',
+      edits: [{ oldText: '"logLevel": "info"', newText: '"logLevel": "debug"' }],
+    }],
+    ['edit', { path: '/workspace/config/app.production.js', edits: [] }],
+    ['edit', { path: '/workspace/deploy/production-eu/values.yaml', edits: [] }],
+    ['edit', { path: '/workspace/config/app.prod.cfg', edits: [] }],
+    ['edit', { path: '/workspace/config/app.production.xml', edits: [] }],
+    ['edit', { path: '/workspace/config/production.env', edits: [] }],
+    ['edit', { path: '/workspace/deploy/prod/values.tfvars', edits: [] }],
+    ['edit', { path: '/workspace/config/config.prod', edits: [] }],
+    ['edit', { path: '/workspace/config/settings.production', edits: [] }],
+    ['edit', { path: '/workspace/config/values.prod', edits: [] }],
+    ['edit', { path: '/workspace/app.production.js', edits: [] }],
+    ['edit', { path: '/workspace/config.production.js', edits: [] }],
+    ['edit', { path: '/workspace/vite.config.production.ts', edits: [] }],
   ];
 
   for (const [toolName, params] of riskyCalls) {
@@ -1443,6 +1504,12 @@ test('applyLocalSafetyDowngrade does not flag inert file contrasts', () => {
     ['write', { path: '/workspace/repo/README.md', content: 'docs' }],
     ['write', { path: '/workspace/repo/.git/hooks/pre-commit.sample', content: '#!/bin/sh' }],
     ['write', { path: '/workspace/repo/.npmrc.example', content: 'registry=https://example.test' }],
+    ['edit', { path: '/workspace/config/app.production.example.json', edits: [] }],
+    ['edit', { path: '/workspace/config/app.production.template.cfg', edits: [] }],
+    ['edit', { path: '/workspace/deploy/prod/values.example.tfvars', edits: [] }],
+    ['edit', { path: '/workspace/tests/test_production.py', edits: [] }],
+    ['edit', { path: '/workspace/src/production_utils.ts', edits: [] }],
+    ['edit', { path: '/workspace/config/app.production.example.xml', edits: [] }],
     ['edit', { path: '/workspace/repo/.github/workflows/README.md', edits: [] }],
     ['write', { path: '/workspace/repo/docs/release.yml.sample', content: 'example' }],
     ['write', { path: '/workspace/repo/.devcontainer/README.md', content: 'docs' }],

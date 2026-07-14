@@ -48,12 +48,25 @@ const ACTIVE_REGISTRY_CONFIGS = new Set([
 const SECURITY_PATH_SEGMENTS = new Set([
   'acl',
   'auth',
+  'authorization',
+  'authz',
   'iam',
   'oauth',
   'rbac',
   'security',
 ]);
 const SECURITY_POLICY_FILE = /^(?:acl|config|permissions|policy|rbac|roles?|rules|scopes|session|settings|token)(?:\.(?:spec|test))?(?:\.(?:c|cc|cpp|cs|go|java|js|jsx|json|kt|kts|php|py|rb|rs|sh|toml|ts|tsx|ya?ml))?$/u;
+const SECURITY_NAME_MARKER = /(?:^|[._-])(?:acl|access[._-]?control|auth|authentication|authorization|authz|iam|oauth|permissions?|rbac|security)(?=[._-]|$)/u;
+const TEST_NAME_MARKER = /(?:^|[._-])(?:spec|test)(?=[._-]|$)/u;
+const TEST_PATH_MARKER = /(?:^|[._-])(?:__tests__|specs?|tests?)(?=[._-]|$)/u;
+const COMPACT_SECURITY_TEST_NAME = /^(?:(?:specs?|tests?)(?:acl|accesscontrol|auth|authentication|authorization|authz|iam|oauth|permissions?|rbac|security)|(?:acl|accesscontrol|auth|authentication|authorization|authz|iam|oauth|permissions?|rbac|security)(?:specs?|tests?))$/u;
+const PRODUCTION_NAME_MARKER = /(?:^|[._-])(?:prod|production)(?=[._-]|$)/u;
+const DATA_CONFIG_EXTENSION = /\.(?:cfg|conf|config|env|hcl|ini|json|json5|jsonc|properties|tf|tfvars|toml|xml|ya?ml)$/u;
+const CODE_CONFIG_EXTENSION = /\.(?:cjs|gradle|groovy|js|kts|mjs|php|py|rb|ts)$/u;
+const ACTIVE_CONFIG_BASENAME = /^(?:config|settings|values)$/u;
+const CONFIG_NAME_MARKER = /(?:^|[._-])(?:config|settings|values)(?=[._-]|$)/u;
+const CONFIG_PATH_MARKER = /^(?:config|configs|configuration|deploy|deployment|deployments|env|environment|environments|helm|infra|k8s|kubernetes)$/u;
+const NAMED_PRODUCTION_CONFIG = /^(?:app|application|config|settings|values)(?:[._-][a-z0-9-]+)*[._-](?:prod|production)$/u;
 const DEVCONTAINER_LIFECYCLE_FILE = /^(?:initialize|oncreate|postattach|postcreate|poststart|updatecontent|waitfor)(?:[._-].*)?$/u;
 const ACTIVE_GIT_HOOKS = new Set([
   'applypatch-msg',
@@ -86,6 +99,8 @@ const ACTIVE_GIT_HOOKS = new Set([
   'update',
 ]);
 const PATCH_FILE_HEADER = /^\*\*\* (?:Add|Delete|Update) File: (.+)$/u;
+const PATCH_DELETE_HEADER = /^\*\*\* Delete File: (.+)$/u;
+const PATCH_UPDATE_HEADER = /^\*\*\* Update File: (.+)$/u;
 const PATCH_MOVE_HEADER = /^\*\*\* Move to: (.+)$/u;
 const LOCAL_ACTION_KEYS = new Set([
   'policy_version',
@@ -96,7 +111,7 @@ const LOCAL_ACTION_KEYS = new Set([
   'run_id',
   'tool_call_id',
 ]);
-const INERT_TEMPLATE_NAME = /(?:^|[._-])(?:example|sample|template|tmpl)(?:\.(?:conf|ini|json|toml|ya?ml))?$/u;
+const INERT_TEMPLATE_NAME = /(?:^|[._-])(?:example|sample|template|tmpl)(?:\.(?:cfg|cjs|conf|config|env|hcl|ini|js|json|json5|jsonc|mjs|properties|py|rb|tfvars|toml|ts|xml|ya?ml))?$/u;
 const DOCUMENTATION_FILE = /\.(?:adoc|markdown|md|rst)$/u;
 const ENV_FILE = /^\.env(?:\..+)?$/u;
 const ENVRC_FILE = /^\.envrc(?:\..+)?$/u;
@@ -1375,9 +1390,74 @@ function targetsActiveAutomation(path) {
     if (!/\.(?:example|sample)$/u.test(devcontainer[1])
       && DEVCONTAINER_LIFECYCLE_FILE.test(devcontainer[1])) return true;
   }
-  const segments = lower.split('/');
+  const segments = lower.split('/').filter((segment) => segment !== '');
   if (segments.slice(0, -1).some((segment) => SECURITY_PATH_SEGMENTS.has(segment))
     && SECURITY_POLICY_FILE.test(name)) return true;
+  if (!INERT_TEMPLATE_NAME.test(name)) {
+    const parents = segments.slice(0, -1);
+    const stem = filenameStem(name);
+    const productionName = PRODUCTION_NAME_MARKER.test(name);
+    const productionParent = parents.some((segment) => PRODUCTION_NAME_MARKER.test(segment));
+    const configContext = parents.some((segment) => CONFIG_PATH_MARKER.test(segment));
+    const testContext = TEST_NAME_MARKER.test(stem)
+      || parents.some((segment) => TEST_PATH_MARKER.test(segment));
+    const dataConfig = DATA_CONFIG_EXTENSION.test(name);
+    const codeConfig = CODE_CONFIG_EXTENSION.test(name);
+    const namedConfig = (NAMED_PRODUCTION_CONFIG.test(stem)
+      || NAMED_PRODUCTION_CONFIG.test(name)
+      || CONFIG_NAME_MARKER.test(stem)) && productionName;
+    if (ENV_FILE.test(name)
+      || !testContext && namedConfig
+      || !testContext && productionName && (dataConfig || codeConfig && configContext)
+      || !testContext && productionParent
+        && (dataConfig || ACTIVE_CONFIG_BASENAME.test(stem))
+      || configContext && (productionName || productionParent)
+        && (dataConfig || codeConfig || ACTIVE_CONFIG_BASENAME.test(stem))) return true;
+  }
+  return false;
+}
+
+function targetsSecurityTest(path) {
+  if (typeof path !== 'string' || !path) return null;
+  const normalized = pathPosix.normalize(
+    path.replaceAll('\\', '/').replace(/\/{2,}/gu, '/'),
+  );
+  const segments = normalized.split('/').filter((segment) => segment !== '');
+  const stem = filenameStem(segments.at(-1));
+  const splitIdentifier = (value) => value
+    .replace(/([A-Z]+)([A-Z][a-z])/gu, '$1_$2')
+    .replace(/([a-z0-9])([A-Z])/gu, '$1_$2')
+    .toLowerCase();
+  const markedStem = splitIdentifier(stem);
+  const parents = segments.slice(0, -1).map(splitIdentifier);
+  const compactStem = markedStem.replace(/[._-]/gu, '');
+  return COMPACT_SECURITY_TEST_NAME.test(compactStem)
+    || (TEST_NAME_MARKER.test(markedStem)
+      || parents.some((segment) => TEST_PATH_MARKER.test(segment)))
+      && (SECURITY_NAME_MARKER.test(markedStem)
+        || parents.some((segment) => SECURITY_NAME_MARKER.test(segment)));
+}
+
+function patchRemovesSecurityTest(params) {
+  const input = ownDataValue(params, 'input');
+  if (!input.ok || typeof input.value !== 'string') return null;
+  let updatedPath = null;
+  for (const line of input.value.split(/\r?\n/u)) {
+    const deleted = PATCH_DELETE_HEADER.exec(line);
+    if (deleted && targetsSecurityTest(deleted[1]) !== false) return true;
+    const updated = PATCH_UPDATE_HEADER.exec(line);
+    if (updated) {
+      updatedPath = updated[1];
+      continue;
+    }
+    if (PATCH_FILE_HEADER.test(line)) {
+      updatedPath = null;
+      continue;
+    }
+    if (PATCH_MOVE_HEADER.test(line)
+      && updatedPath !== null
+      && targetsSecurityTest(updatedPath) !== false) return true;
+  }
   return false;
 }
 
@@ -1494,7 +1574,10 @@ export function applyLocalSafetyDowngrade(result, toolName, visibleParams, local
 
   if (!FILE_WRITE_TOOLS.has(toolName)) return result;
   const targets = fileTargets(action.params, toolName);
-  if (targets === null || targets.some((path) => (
+  const securityTestRemoval = toolName === 'apply_patch'
+    ? patchRemovesSecurityTest(action.params)
+    : false;
+  if (targets === null || securityTestRemoval !== false || targets.some((path) => (
     targetsOpenClawConfigWrite(path) !== false || targetsActiveAutomation(path) !== false
   ))) {
     return localReview(result);

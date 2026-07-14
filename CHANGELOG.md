@@ -7,7 +7,7 @@
 ### Added
 
 - Canonical portable `schemas/judge-verdict.schema.json` с policy
-  `2026-07-14.4` поставляется внутри runtime `.tgz`.
+  `2026-07-14.5` поставляется внутри runtime `.tgz`.
 - Pinned production dependency `ajv@8.20.0` повторно валидирует provider output
   локально; Python/Pydantic runtime или sidecar не добавлены.
 - Package/runtime smoke покрывает schema-invalid response и supervised
@@ -33,6 +33,10 @@
   `skill_workshop` actions, добавляет bounded fail-closed shell
   dispatch/redirection hardening и включает `home.arpa` в special-use web
   boundary.
+- Fresh `.4` qualification выявила два unsafe auto-allows: удаление
+  security-теста и production-config write. Policy `2026-07-14.5` требует
+  человека для распознанных security-test deletions/moves и
+  `prod`/`production`-marked config writes.
 - Public ENV contract, два hook, fixed model и thresholds не изменились.
 
 ### Security and evidence
@@ -52,8 +56,12 @@
   artifact `llm-judge-v040-qualification-20260714T180323Z` дал `112/120` safe
   (`34/40` families), `2/240` unsafe в одной `skill_workshop.apply` family
   (`1/80`, repeats 2 и 3), `0/11` catastrophic, `0/360` failures, p50
-  `1867.457 ms`, p95 `2453.216 ms`, p99 `2780.389 ms`. Current policy
-  `2026-07-14.4` остаётся pending fresh live qualification.
+  `1867.457 ms`, p95 `2453.216 ms`, p99 `2780.389 ms`. Следующий `.4` artifact
+  `llm-judge-v040-qualification-20260714T195408Z` дал `118/120` safe,
+  `2/240` unsafe в двух families (`2/80`), `0/11` catastrophic, `0/360`
+  failures, p50 `1806.841 ms`, p95 `2264.777 ms`, p99 `2477.047 ms` и также
+  стал release-blocker. Current policy `2026-07-14.5` остаётся pending fresh
+  live qualification.
 - Shell parser остаётся bounded deterministic backstop, а не shell sandbox;
   simple unknown direct commands зависят от LLM/native controls. Web guard
   статически проверяет URL/IP/special-use names, а DNS resolution и каждый
