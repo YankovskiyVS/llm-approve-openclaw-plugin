@@ -10,7 +10,7 @@ import {
   JUDGE_DECISIONS,
   validateJudgeVerdict,
 } from './judge-schema.js';
-import { containsOpaqueData } from './redact.js';
+import { containsOpaqueData, isSecretBearingKey } from './redact.js';
 
 const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
@@ -93,9 +93,10 @@ const LOCAL_ACTION_KEYS = new Set([
   'run_id',
   'tool_call_id',
 ]);
-const INERT_TEMPLATE_NAME = /(?:^|[._-])(?:example|sample|template|tmpl)$/u;
+const INERT_TEMPLATE_NAME = /(?:^|[._-])(?:example|sample|template|tmpl)(?:\.(?:json|toml|ya?ml))?$/u;
 const DOCUMENTATION_FILE = /\.(?:adoc|markdown|md|rst)$/u;
 const ENV_FILE = /^\.env(?:\..+)?$/u;
+const ENVRC_FILE = /^\.envrc(?:\..+)?$/u;
 const PRIVATE_KEY_FILE = /^(?:id_(?:dsa|ecdsa|ed25519|rsa)|.*(?:private[._-]?key|privkey).*)$/u;
 const PRIVATE_KEY_EXTENSION = /\.(?:jks|key|p12|pfx)$/u;
 const PUBLIC_KEY_FILE = /^(?:id_(?:dsa|ecdsa|ed25519|rsa)|.*(?:public[._-]?key|pubkey).*)\.pub$/u;
@@ -114,36 +115,12 @@ const SENSITIVE_READ_FILES = new Set([
   'service_account.json',
 ]);
 const SENSITIVE_READ_DIRECTORIES = new Set([
+  '.direnv',
   '.kube',
   '.ssh',
   'credentials',
   'secrets',
   'vault',
-]);
-const SECRET_CONFIG_COMPONENTS = new Set([
-  'accesskey',
-  'accesstoken',
-  'apikey',
-  'apikeys',
-  'apitoken',
-  'authorization',
-  'authtoken',
-  'bottoken',
-  'clientsecret',
-  'credential',
-  'credentials',
-  'idtoken',
-  'password',
-  'passwordhash',
-  'passwd',
-  'privatekey',
-  'refreshtoken',
-  'secret',
-  'secretaccesskey',
-  'secretkey',
-  'secrets',
-  'sessiontoken',
-  'token',
 ]);
 const SAFE_CONFIG_METADATA_COMPONENTS = new Set([
   'apikeypath',
@@ -151,16 +128,23 @@ const SAFE_CONFIG_METADATA_COMPONENTS = new Set([
   'count',
   'enabled',
   'endpoint',
+  'envfile',
+  'maxtoken',
   'maxtokens',
   'model',
-  'models',
   'passwordfile',
   'secretpath',
   'thinkingdefault',
   'tokenbudget',
+  'tokencount',
+  'tokenlimit',
+  'tokenusage',
   'timeoutms',
 ]);
-const SENSITIVE_CONFIG_CONTAINERS = new Set(['auth', 'credentials', 'secrets']);
+const SHADOW_DATABASE_FILE = /^(?:g?shadow)(?:-|~|\.(?:bak|backup|old|\d+))?$/u;
+const SSH_HOST_PRIVATE_KEY = /^ssh_host_[^/]+_key$/u;
+const SSH_HOST_PUBLIC_KEY_PATH = /^\/etc\/ssh\/ssh_host_[^/]+_key\.pub$/u;
+const KUBERNETES_CREDENTIAL_CONFIG = /^(?:[^/]*admin|bootstrap-kubelet|cluster|controller-manager|kubelet|scheduler)\.conf$/u;
 
 function isPlainObject(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -386,6 +370,42 @@ function pathHasAmbiguousWindowsAlias(path) {
   return path.split(/[\\/]+/u).some((segment) => segment !== '' && /[ .]$/u.test(segment));
 }
 
+function normalizeAbsoluteSystemPath(path) {
+  const slashPath = path.replaceAll('\\', '/');
+  if (!slashPath.startsWith('/') || slashPath.startsWith('//')) return null;
+  return pathPosix.normalize(slashPath.replace(/\/{2,}/gu, '/')).toLowerCase();
+}
+
+function targetsSensitiveSystemPath(path) {
+  const normalized = normalizeAbsoluteSystemPath(path);
+  if (normalized === null) return false;
+  const segments = normalized.split('/').filter(Boolean);
+
+  if (segments[0] === 'etc') {
+    if (segments.length === 2 && SHADOW_DATABASE_FILE.test(segments[1])) return true;
+    if (segments[1] === 'ssh' && SSH_HOST_PRIVATE_KEY.test(segments.at(-1))) return true;
+    if (segments[1] === 'ssl' && segments[2] === 'private') return true;
+    if (segments[1] === 'kubernetes'
+      && KUBERNETES_CREDENTIAL_CONFIG.test(segments.at(-1))) return true;
+  }
+
+  return segments[0] === 'proc'
+    && (segments[1] === 'self' || /^\d+$/u.test(segments[1]))
+    && ['cmdline', 'environ', 'fd', 'mem'].includes(segments[2]);
+}
+
+function isSafeSystemMetadataPath(path) {
+  const normalized = normalizeAbsoluteSystemPath(path);
+  return normalized === '/etc/passwd'
+    || normalized === '/proc/version'
+    || (normalized !== null && SSH_HOST_PUBLIC_KEY_PATH.test(normalized));
+}
+
+function filenameStem(name) {
+  const extensionIndex = name.lastIndexOf('.');
+  return extensionIndex > 0 ? name.slice(0, extensionIndex) : name;
+}
+
 function targetsCredentialMaterial(path) {
   if (pathHasRawTraversal(path) || pathHasAmbiguousWindowsAlias(path)) return true;
   const segments = path
@@ -397,34 +417,36 @@ function targetsCredentialMaterial(path) {
   const name = segments.at(-1);
 
   if (INERT_TEMPLATE_NAME.test(name) || PUBLIC_KEY_FILE.test(name)) return false;
+  if (isSafeSystemMetadataPath(path)) return false;
   if (ENV_FILE.test(name)
+    || ENVRC_FILE.test(name)
     || SENSITIVE_READ_FILES.has(name)
     || PRIVATE_KEY_FILE.test(name)
     || PRIVATE_KEY_EXTENSION.test(name)) return true;
+  if (targetsSensitiveSystemPath(path)) return true;
   if (segments.at(-2) === '.docker' && name === 'config.json') return true;
   if (segments.at(-2) === '.kube' && name === 'config') return true;
   if (segments.slice(0, -1).some((segment) => SENSITIVE_READ_DIRECTORIES.has(segment))) {
     return true;
   }
   if (DOCUMENTATION_FILE.test(name)) return false;
+  if (isSecretBearingKey(filenameStem(name))) return true;
   if (CREDENTIAL_NAME.test(name)) return true;
   return false;
 }
 
 function gatewayPathIsSensitive(path) {
-  const components = path
+  const rawComponents = path
     .split(/[./:\[\]\\]+/u)
-    .filter((component) => component !== '')
+    .filter((component) => component !== '');
+  if (rawComponents.length < 2 || rawComponents.some(isSecretBearingKey)) return true;
+  const components = rawComponents
     .map((component) => component.toLowerCase().replace(/[^a-z0-9]+/gu, ''));
-  if (components.length === 0 || components.some((component) => component === '')) return true;
+  if (components.some((component) => (
+    component === '' || component === 'env' || component === 'headers'
+  ))) return true;
   const last = components.at(-1);
-  if (components.some((component) => SECRET_CONFIG_COMPONENTS.has(component))) return true;
-  if (SAFE_CONFIG_METADATA_COMPONENTS.has(last)) return false;
-  if (components.some((component) => SENSITIVE_CONFIG_CONTAINERS.has(component))) return true;
-  const providersIndex = components.findIndex((component, index) => (
-    component === 'models' && components[index + 1] === 'providers'
-  ));
-  return providersIndex >= 0;
+  return !SAFE_CONFIG_METADATA_COMPONENTS.has(last);
 }
 
 function targetsActiveAutomation(path) {

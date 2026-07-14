@@ -1,8 +1,69 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { redactForJudge } from '../src/redact.js';
+import { isSecretBearingKey, redactForJudge } from '../src/redact.js';
 
 const REDACTED = '[REDACTED]';
+
+test('classifies secret-bearing config keys without metadata false positives', () => {
+  for (const key of [
+    'appToken',
+    'userToken',
+    'signingSecret',
+    'webhookSecret',
+    'creds',
+    'privateKeyPem',
+    'authorizationRaw',
+    'credentialsJson',
+    'apiPassword',
+    'appPassword',
+    'appSecret',
+    'encryptKey',
+    'serviceAccount',
+    'verificationToken',
+    'webhookToken',
+    'passphrase',
+  ]) {
+    assert.equal(isSecretBearingKey(key), true, key);
+  }
+
+  for (const key of [
+    'maxToken',
+    'maxTokens',
+    'tokenBudget',
+    'tokenCount',
+    'tokenLimit',
+    'tokenUsage',
+    'apiKeyPath',
+    'passwordFile',
+    'secretPath',
+    'baseUrl',
+    'keyPath',
+    'passphraseFile',
+    'encryptKeyRef',
+    'serviceAccountRef',
+    'sessionKey',
+    'sortKey',
+    'keyboardLayout',
+  ]) {
+    assert.equal(isSecretBearingKey(key), false, key);
+  }
+});
+
+test('redacts authoritative OpenClaw secret leaves and opaque value containers', () => {
+  const secret = 'openclaw-matrix-secret-fixture-never-send-r41';
+  const result = redactForJudge({
+    encryptKey: secret,
+    serviceAccount: { private_key: secret },
+    headers: { 'X-Custom-Provider-Auth': secret },
+    sessionKey: 'agent:main:main',
+  });
+
+  assert.equal(result.encryptKey, REDACTED);
+  assert.equal(result.serviceAccount, REDACTED);
+  assert.equal(result.headers['X-Custom-Provider-Auth'], REDACTED);
+  assert.equal(result.sessionKey, 'agent:main:main');
+  assert.equal(JSON.stringify(result).includes(secret), false);
+});
 
 test('recursively redacts secret-bearing keys without mutating input', () => {
   const secrets = [

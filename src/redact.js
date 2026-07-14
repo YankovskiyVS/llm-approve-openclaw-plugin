@@ -19,6 +19,7 @@ const SECRET_METADATA_SUFFIXES = new Set([
   'env',
   'name',
   'field',
+  'ref',
   'type',
   'required',
   'enabled',
@@ -57,6 +58,8 @@ const SECRET_COMPONENTS = new Set([
   'secret',
   'credential',
   'credentials',
+  'creds',
+  'passphrase',
   'authorization',
   'cookie',
   'пароль',
@@ -65,7 +68,7 @@ const SECRET_COMPONENTS = new Set([
   'авторизация',
   'куки',
 ]);
-const COLLAPSED_SECRET_VALUE_PATTERN = /(?:apikey|clientsecret|privatekey|secretaccesskey|password|passwd|secret|credential|credentials|authorization|cookie|accesstoken|refreshtoken|authtoken|idtoken|sessiontoken|token)(?:value|data|pem|text|raw|content|current|json|string|material|bytes)$/u;
+const COLLAPSED_SECRET_VALUE_PATTERN = /(?:apikey|clientsecret|privatekey|secretaccesskey|password|passwd|secret|credential|credentials|authorization|cookie|accesstoken|refreshtoken|authtoken|idtoken|sessiontoken|serviceaccount|token)(?:value|data|pem|text|raw|content|current|json|string|material|bytes)$/u;
 const REDACTION_ERROR_MESSAGES = new Set([
   'cannot redact cyclic value',
   'cannot redact unsupported value',
@@ -78,7 +81,8 @@ function isPlainObject(value) {
   return prototype === Object.prototype || prototype === null;
 }
 
-function isSecretKey(key) {
+export function isSecretBearingKey(key) {
+  if (typeof key !== 'string') return false;
   return isEmbeddedSecretKey(key);
 }
 
@@ -96,6 +100,7 @@ function isEmbeddedSecretKey(key) {
   if (parts.length === 0) return false;
   const collapsed = parts.join('');
   const finalPart = parts.at(-1);
+  if (collapsed.endsWith('serviceaccount')) return true;
   if (SECRET_METADATA_SUFFIXES.has(finalPart)
     || [...SECRET_METADATA_SUFFIXES].some((suffix) => collapsed.endsWith(suffix))) {
     return false;
@@ -128,15 +133,18 @@ function isEmbeddedSecretKey(key) {
   if (parts.some((part, index) => part === 'private' && parts[index + 1] === 'key')) return true;
   return collapsed.endsWith('apikey')
     || collapsed.endsWith('privatekey')
+    || collapsed.endsWith('encryptkey')
     || collapsed.endsWith('accesskeyid')
     || collapsed.endsWith('secretaccesskey')
     || collapsed.endsWith('clientsecret')
+    || collapsed.endsWith('secret')
     || collapsed.endsWith('authorization')
     || collapsed.endsWith('cookie')
     || collapsed.endsWith('password')
     || collapsed.endsWith('passwd')
     || collapsed.endsWith('credential')
     || collapsed.endsWith('credentials')
+    || collapsed.endsWith('serviceaccount')
     || COLLAPSED_SECRET_VALUE_PATTERN.test(collapsed)
     || hasToken;
 }
@@ -144,7 +152,7 @@ function isEmbeddedSecretKey(key) {
 function matchesSecretKey(value, pattern) {
   pattern.lastIndex = 0;
   for (let match = pattern.exec(value); match !== null; match = pattern.exec(value)) {
-    if (isEmbeddedSecretKey(match[1])) return true;
+    if (isSecretBearingKey(match[1])) return true;
   }
   return false;
 }
@@ -264,9 +272,9 @@ function redactValue(value, maxStringLength, ancestors) {
     const result = {};
     for (const key of keys) {
       let redacted;
-      if (isSecretKey(key)) {
+      if (isSecretBearingKey(key)) {
         redacted = REDACTED;
-      } else if (key.toLowerCase() === 'env') {
+      } else if (key.toLowerCase() === 'env' || key.toLowerCase() === 'headers') {
         redacted = redactEnv(descriptors[key].value, maxStringLength);
       } else {
         redacted = redactValue(descriptors[key].value, maxStringLength, ancestors);
