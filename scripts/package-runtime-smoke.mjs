@@ -18,7 +18,7 @@ if (!packageRoot || !stateDir) {
     await fs.readFile(path.resolve(packageRoot, 'package.json'), 'utf8'),
   );
   assert.equal(packageMetadata.version, '0.4.0');
-  assert.equal(POLICY_VERSION, '2026-07-14.3');
+  assert.equal(POLICY_VERSION, '2026-07-14.4');
   const auditPath = path.join(stateDir, 'logs', 'integration.jsonl');
   const fixtureKey = 'runtime-smoke-key-v040';
   const rawPrompt = 'runtime smoke trusted prompt';

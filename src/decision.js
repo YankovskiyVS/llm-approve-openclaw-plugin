@@ -24,6 +24,7 @@ const LOCAL_GUARD_REASON = 'local safety guard requires human review';
 const INVALID_LOCAL_GUARD_REASON = 'invalid local safety gate input';
 const READ_ONLY_CRON_ACTIONS = new Set(['list', 'status', 'get', 'runs']);
 const READ_ONLY_PROCESS_ACTIONS = new Set(['list', 'poll', 'log']);
+const READ_ONLY_SKILL_WORKSHOP_ACTIONS = new Set(['list']);
 const READ_ONLY_MESSAGE_ACTIONS = new Set([
   'channel-info',
   'channel-list',
@@ -158,6 +159,7 @@ const SHELL_SCAN_MAX_COMMANDS = 128;
 const SHELL_SCAN_MAX_TOKENS = 1_024;
 const SHELL_INTERPRETERS = new Set([
   'bash',
+  'cmd',
   'dash',
   'fish',
   'ksh',
@@ -166,10 +168,30 @@ const SHELL_INTERPRETERS = new Set([
   'sh',
   'zsh',
 ]);
-const INLINE_INTERPRETERS = new Set(['node', 'nodejs', 'perl', 'python', 'python3', 'ruby']);
+const INLINE_INTERPRETERS = new Set([
+  'lua', 'node', 'nodejs', 'perl', 'php', 'python', 'python3', 'ruby',
+]);
 const DELETE_COMMANDS = new Set(['rm', 'rmdir', 'shred', 'unlink']);
 const PERMISSION_COMMANDS = new Set(['chgrp', 'chmod', 'chown']);
+const PACKAGE_MANAGER_COMMANDS = new Set([
+  'apk', 'apt', 'apt-get', 'brew', 'bun', 'bunx', 'cargo', 'composer', 'dnf', 'gem',
+  'go', 'npm', 'npx', 'pip', 'pip3', 'pipx', 'pnpm', 'pnpx', 'poetry', 'uv', 'yarn',
+  'yum', 'zypper',
+]);
+const SHELL_CONTROL_WORDS = new Set([
+  '!', '.', 'case', 'coproc', 'do', 'done', 'elif', 'else', 'esac', 'fi', 'for',
+  'function', 'if', 'in', 'noglob', 'select', 'source', 'then', 'trap', 'until',
+  'while',
+]);
+const SHELL_WRAPPERS = new Set([
+  'builtin', 'busybox', 'command', 'env', 'exec', 'ionice', 'nice', 'nohup',
+  'stdbuf', 'sudo', 'time', 'timeout', 'toybox',
+]);
+const SHELL_REDIRECTIONS = new Set([
+  '<', '>', '>>', '<<', '<<<', '<>', '<&', '>&', '&>', '&>>', '>|',
+]);
 const INTERNAL_HOST_SUFFIXES = [
+  '.home.arpa',
   '.internal',
   '.local',
   '.localdomain',
@@ -359,8 +381,13 @@ function shellTokenize(source) {
     || source.length > SHELL_SCAN_MAX_LENGTH || source.includes('\0')) return null;
   const commands = [];
   let tokens = [];
+  let dynamicTokenIndexes = new Set();
+  let fdTokenIndexes = new Set();
+  let operatorTokenIndexes = new Set();
   let token = '';
   let tokenStarted = false;
+  let tokenDynamic = false;
+  let tokenQuotedOrEscaped = false;
   let quote = null;
   let separatorBefore = null;
   let tokenCount = 0;
@@ -369,20 +396,40 @@ function shellTokenize(source) {
     if (!tokenStarted) return true;
     tokenCount += 1;
     if (tokenCount > SHELL_SCAN_MAX_TOKENS) return false;
+    if (tokenDynamic) dynamicTokenIndexes.add(tokens.length);
     tokens.push(token);
     token = '';
     tokenStarted = false;
+    tokenDynamic = false;
+    tokenQuotedOrEscaped = false;
     return true;
   }
 
   function finishCommand(separator) {
     if (!finishToken()) return false;
     if (tokens.length > 0) {
-      commands.push({ tokens, separatorBefore });
+      commands.push({
+        tokens,
+        dynamicTokenIndexes,
+        fdTokenIndexes,
+        operatorTokenIndexes,
+        separatorBefore,
+      });
       if (commands.length > SHELL_SCAN_MAX_COMMANDS) return false;
       tokens = [];
+      dynamicTokenIndexes = new Set();
+      fdTokenIndexes = new Set();
+      operatorTokenIndexes = new Set();
     }
     separatorBefore = separator;
+    return true;
+  }
+
+  function pushOperator(operator) {
+    tokenCount += 1;
+    if (tokenCount > SHELL_SCAN_MAX_TOKENS) return false;
+    operatorTokenIndexes.add(tokens.length);
+    tokens.push(operator);
     return true;
   }
 
@@ -398,10 +445,22 @@ function shellTokenize(source) {
         quote = null;
       } else if (character === '\\') {
         if (index + 1 >= source.length) return null;
+        if (source[index + 1] === '\n') {
+          index += 1;
+          continue;
+        }
+        if (source[index + 1] === '\r' && source[index + 2] === '\n') {
+          index += 2;
+          continue;
+        }
         token += source[index + 1];
         index += 1;
       } else if (character === '`' || (character === '$' && source[index + 1] === '(')) {
         return null;
+      } else if (character === '$') {
+        tokenStarted = true;
+        tokenDynamic = true;
+        token += character;
       } else {
         token += character;
       }
@@ -411,11 +470,21 @@ function shellTokenize(source) {
     if (character === "'" || character === '"') {
       quote = character;
       tokenStarted = true;
+      tokenQuotedOrEscaped = true;
       continue;
     }
     if (character === '\\') {
       if (index + 1 >= source.length) return null;
+      if (source[index + 1] === '\n') {
+        index += 1;
+        continue;
+      }
+      if (source[index + 1] === '\r' && source[index + 2] === '\n') {
+        index += 2;
+        continue;
+      }
       tokenStarted = true;
+      tokenQuotedOrEscaped = true;
       token += source[index + 1];
       index += 1;
       continue;
@@ -425,13 +494,49 @@ function shellTokenize(source) {
       if (!finishCommand(';')) return null;
       continue;
     }
-    if (character === '$' && source[index + 1] === '(') {
-      if (!finishCommand(';')) return null;
+    if (character === '`' || (character === '$' && source[index + 1] === '(')
+      || character === '(' || character === ')') return null;
+    if (character === '$' || character === '*' || character === '?'
+      || character === '[' || character === ']' || character === '{'
+      || character === '}') {
+      tokenStarted = true;
+      tokenDynamic = true;
+      token += character;
+      continue;
+    }
+    if (character === '|' && source[index + 1] === '&') {
+      if (!finishCommand('|&')) return null;
       index += 1;
       continue;
     }
-    if (character === '`' || character === '(' || character === ')') {
-      if (!finishCommand(';')) return null;
+    if (character === '&' && source[index + 1] === '>') {
+      if (!finishToken()) return null;
+      let operator = '&>';
+      index += 1;
+      if (source[index + 1] === '>') {
+        operator += '>';
+        index += 1;
+      }
+      if (!pushOperator(operator)) return null;
+      continue;
+    }
+    if (character === '<' || character === '>') {
+      const fdIndex = tokenStarted && !tokenQuotedOrEscaped && /^\d+$/u.test(token)
+        ? tokens.length
+        : null;
+      if (!finishToken()) return null;
+      if (fdIndex !== null) fdTokenIndexes.add(fdIndex);
+      let operator = character;
+      if (source[index + 1] === '&'
+        || (character === '<' && source[index + 1] === '>')
+        || (character === '>' && source[index + 1] === '|')) {
+        operator += source[index + 1];
+        index += 1;
+      } else while (source[index + 1] === character && operator.length < 3) {
+        operator += character;
+        index += 1;
+      }
+      if (!pushOperator(operator)) return null;
       continue;
     }
     if (character === '&' || character === '|') {
@@ -476,26 +581,73 @@ function skipWrapperOptions(tokens, start, optionsWithValues = new Set()) {
   return index;
 }
 
+function skipShellPrefixes(tokens, start = 0) {
+  let index = start;
+  while (index < tokens.length) {
+    if (isShellAssignment(tokens[index])) {
+      index += 1;
+      continue;
+    }
+    if (/^\d+$/u.test(tokens[index]) && SHELL_REDIRECTIONS.has(tokens[index + 1])) {
+      index += 3;
+      continue;
+    }
+    if (SHELL_REDIRECTIONS.has(tokens[index])) {
+      index += 2;
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
 function shellCommandView(tokens) {
-  let index = 0;
-  while (index < tokens.length && isShellAssignment(tokens[index])) index += 1;
-  for (let wrappers = 0; wrappers < 8 && index < tokens.length; wrappers += 1) {
+  let index = skipShellPrefixes(tokens);
+  for (let wrappers = 0; wrappers < 8; wrappers += 1) {
+    index = skipShellPrefixes(tokens, index);
+    if (index >= tokens.length) return null;
     const name = shellBasename(tokens[index]);
     if (name === 'sudo') {
       index = skipWrapperOptions(tokens, index + 1, new Set([
-        '-C', '-D', '-g', '-h', '-p', '-r', '-t', '-u',
-        '--chdir', '--group', '--host', '--prompt', '--role', '--type', '--user',
+        '-C', '-D', '-R', '-T', '-U', '-a', '-c', '-g', '-h', '-p', '-r', '-t', '-u',
+        '--auth-type', '--chdir', '--chroot', '--close-from', '--command-timeout', '--group',
+        '--host', '--login-class', '--other-user', '--prompt', '--role', '--type', '--user',
       ]));
+      if (index >= tokens.length) return { name, args: [], ambiguous: true, commandIndex: index };
       continue;
     }
-    if (name === 'command' || name === 'builtin' || name === 'nohup') {
+    if (name === 'command') {
+      const originalArgs = tokens.slice(index + 1);
+      if (originalArgs.some((arg) => arg === '-v' || arg === '-V')) {
+        return { name, args: originalArgs, commandIndex: index };
+      }
       index = skipWrapperOptions(tokens, index + 1);
+      continue;
+    }
+    if (name === 'builtin' || name === 'nohup') {
+      index = skipWrapperOptions(tokens, index + 1);
+      continue;
+    }
+    if (name === 'exec') {
+      index = skipWrapperOptions(tokens, index + 1, new Set(['-a']));
+      if (index >= tokens.length) return { name, args: [], ambiguous: true, commandIndex: index };
+      continue;
+    }
+    if (name === 'time') {
+      index = skipWrapperOptions(tokens, index + 1, new Set([
+        '-f', '-o', '--format', '--output',
+      ]));
+      if (index >= tokens.length) return { name, args: [], ambiguous: true, commandIndex: index };
       continue;
     }
     if (name === 'env') {
       const originalArgs = tokens.slice(index + 1);
       if (originalArgs.includes('--help') || originalArgs.includes('--version')) {
-        return { name, args: originalArgs };
+        return { name, args: originalArgs, commandIndex: index };
+      }
+      if (originalArgs.some((arg) => arg === '-S' || arg === '--split-string'
+        || arg.startsWith('--split-string='))) {
+        return { name, args: originalArgs, ambiguous: true, commandIndex: index };
       }
       index += 1;
       while (index < tokens.length) {
@@ -503,24 +655,92 @@ function shellCommandView(tokens) {
           index += 1;
           continue;
         }
-        if (tokens[index] === '-u' || tokens[index] === '--unset') {
+        if (['-C', '-P', '-a', '-u', '--argv0', '--chdir', '--unset'].includes(tokens[index])) {
           index += 2;
           continue;
         }
-        if (tokens[index].startsWith('-')) {
+        if (tokens[index] === '--') {
+          index += 1;
+          break;
+        }
+        if (/^--(?:argv0|chdir|unset)=/u.test(tokens[index])) {
           index += 1;
           continue;
         }
+        if (['-0', '-i', '--debug', '--ignore-environment', '--null'].includes(tokens[index])) {
+          index += 1;
+          continue;
+        }
+        if (tokens[index].startsWith('-')) {
+          return { name, args: originalArgs, ambiguous: true, commandIndex: index };
+        }
         break;
       }
-      if (index >= tokens.length) return { name, args: originalArgs };
+      if (index >= tokens.length) return {
+        name, args: originalArgs, ambiguous: true, commandIndex: index,
+      };
       continue;
     }
-    return { name, args: tokens.slice(index + 1) };
+    if (name === 'timeout') {
+      index = skipWrapperOptions(tokens, index + 1, new Set([
+        '-k', '-s', '--kill-after', '--signal',
+      ]));
+      if (index >= tokens.length || tokens[index].startsWith('-')) {
+        return { name, args: tokens.slice(index), ambiguous: true, commandIndex: index };
+      }
+      index += 1;
+      if (tokens[index] === '--') index += 1;
+      if (index >= tokens.length) return { name, args: [], ambiguous: true, commandIndex: index };
+      continue;
+    }
+    if (name === 'nice') {
+      index = skipWrapperOptions(tokens, index + 1, new Set(['-n', '--adjustment']));
+      if (index >= tokens.length) return { name, args: [], ambiguous: true, commandIndex: index };
+      continue;
+    }
+    if (name === 'ionice') {
+      index = skipWrapperOptions(tokens, index + 1, new Set([
+        '-c', '-n', '-p', '-P', '-u', '--class', '--classdata', '--pid', '--pgid', '--uid',
+      ]));
+      if (index >= tokens.length) return { name, args: [], ambiguous: true, commandIndex: index };
+      continue;
+    }
+    if (name === 'stdbuf') {
+      index = skipWrapperOptions(tokens, index + 1, new Set([
+        '-e', '-i', '-o', '--error', '--input', '--output',
+      ]));
+      if (index >= tokens.length) return { name, args: [], ambiguous: true, commandIndex: index };
+      continue;
+    }
+    if (name === 'busybox' || name === 'toybox') {
+      const originalArgs = tokens.slice(index + 1);
+      if (name === 'busybox' && originalArgs.some((arg) => (
+        arg === '--install' || arg.startsWith('--install=')
+      ))) {
+        return { name, args: originalArgs, ambiguous: true, commandIndex: index };
+      }
+      if (originalArgs[0]?.startsWith('-')) {
+        if (hasHelpOrVersion(originalArgs)
+          || ['--list', '--list-full', '--show'].includes(originalArgs[0])) {
+          return { name, args: originalArgs, commandIndex: index };
+        }
+        return { name, args: originalArgs, ambiguous: true, commandIndex: index };
+      }
+      index += 1;
+      if (index >= tokens.length) return { name, args: [], ambiguous: true, commandIndex: index };
+      continue;
+    }
+    if (name === 'xargs' || name === 'parallel' || name === 'watch') {
+      return { name, args: tokens.slice(index + 1), ambiguous: true, commandIndex: index };
+    }
+    return { name, args: tokens.slice(index + 1), commandIndex: index };
   }
-  return index < tokens.length
-    ? { name: shellBasename(tokens[index]), args: tokens.slice(index + 1) }
-    : null;
+  if (index >= tokens.length) return null;
+  const name = shellBasename(tokens[index]);
+  if (SHELL_WRAPPERS.has(name)) {
+    return { name, args: tokens.slice(index + 1), ambiguous: true, commandIndex: index };
+  }
+  return { name, args: tokens.slice(index + 1), commandIndex: index };
 }
 
 function hasHelpOrVersion(args) {
@@ -533,32 +753,216 @@ function shortFlagIncludes(args, letters) {
   ));
 }
 
-function firstNonOption(args) {
-  return args.find((arg) => !arg.startsWith('-'));
+function packageArgsWithoutOptionValues(name, args) {
+  const optionsWithValues = new Set();
+  if (name === 'npm') {
+    for (const option of [
+      '-C', '-w', '--cache', '--prefix', '--registry', '--tag', '--userconfig', '--workspace',
+    ]) optionsWithValues.add(option);
+  }
+  if (name === 'pnpm') {
+    for (const option of [
+      '-C', '-F', '--dir', '--filter', '--global-dir', '--registry', '--virtual-store-dir',
+      '--workspace-concurrency',
+    ]) optionsWithValues.add(option);
+  }
+  if (name === 'yarn') {
+    for (const option of [
+      '--cache-folder', '--cwd', '--modules-folder', '--mutex', '--network-timeout', '--registry',
+    ]) optionsWithValues.add(option);
+  }
+  if (name === 'bun') {
+    for (const option of ['--cache-dir', '--cwd', '--filter', '--registry']) {
+      optionsWithValues.add(option);
+    }
+  }
+  if (['pip', 'pip3', 'pipx'].includes(name)) {
+    for (const option of [
+      '--cache-dir', '--cert', '--client-cert', '--extra-index-url', '--index-url', '--proxy',
+      '--python', '--retries', '--timeout', '--trusted-host',
+    ]) optionsWithValues.add(option);
+  }
+  if (name === 'go') optionsWithValues.add('-C');
+  if (name === 'cargo') {
+    for (const option of ['-C', '--config', '--manifest-path', '--target', '--target-dir']) {
+      optionsWithValues.add(option);
+    }
+  }
+  if (name === 'apt' || name === 'apt-get') {
+    for (const option of ['-c', '-o', '-t', '--config-file', '--option', '--target-release']) {
+      optionsWithValues.add(option);
+    }
+  }
+  if (name === 'dnf' || name === 'yum') {
+    for (const option of [
+      '-c', '--config', '--disableexcludes', '--disablerepo', '--enablerepo', '--installroot',
+      '--releasever', '--repo', '--setopt',
+    ]) optionsWithValues.add(option);
+  }
+  if (name === 'zypper') {
+    for (const option of ['--config', '--reposd-dir', '--root']) optionsWithValues.add(option);
+  }
+  const result = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (optionsWithValues.has(arg)) {
+      index += 1;
+      continue;
+    }
+    if ([...optionsWithValues].some((option) => arg.startsWith(`${option}=`))) continue;
+    result.push(arg);
+  }
+  return result;
 }
 
 function packageInstallCommand(name, args) {
-  if ((name === 'python' || name === 'python3') && args[0] === '-m'
-    && ['pip', 'pip3'].includes(args[1])) return packageInstallCommand(args[1], args.slice(2));
-  if (name === 'uv' && args[0] === 'pip') return packageInstallCommand('pip', args.slice(1));
-  const operation = firstNonOption(args);
+  if (name === 'python' || name === 'python3') {
+    const moduleIndex = args.indexOf('-m');
+    if (moduleIndex >= 0 && ['pip', 'pip3'].includes(args[moduleIndex + 1])) {
+      return packageInstallCommand(args[moduleIndex + 1], args.slice(moduleIndex + 2));
+    }
+  }
+  const uvPipIndex = name === 'uv' ? args.indexOf('pip') : -1;
+  if (uvPipIndex >= 0) return packageInstallCommand('pip', args.slice(uvPipIndex + 1));
+  const normalizedArgs = packageArgsWithoutOptionValues(name, args)
+    .map((arg) => arg.toLowerCase());
+  const beforeDoubleDash = normalizedArgs.slice(0, normalizedArgs.indexOf('--') < 0
+    ? normalizedArgs.length
+    : normalizedArgs.indexOf('--'));
+  const firstKnownOperation = (installOperations, safeOperations = []) => {
+    const install = new Set(installOperations);
+    const safe = new Set(safeOperations);
+    let unparsedOption = false;
+    for (let index = 0; index < beforeDoubleDash.length; index += 1) {
+      const arg = beforeDoubleDash[index];
+      if (arg.startsWith('-')) {
+        unparsedOption = true;
+        continue;
+      }
+      if (install.has(arg)) return true;
+      if (safe.has(arg)) {
+        return unparsedOption
+          && beforeDoubleDash.slice(index + 1).some((later) => install.has(later));
+      }
+    }
+    return false;
+  };
   if (['pip', 'pip3', 'pipx', 'gem', 'cargo', 'go', 'brew'].includes(name)) {
-    return operation === 'install';
+    return firstKnownOperation(['install'], [
+      'check', 'config', 'help', 'info', 'list', 'outdated', 'search', 'show', 'version', 'why',
+    ]);
   }
   if (['npm', 'pnpm', 'yarn', 'bun'].includes(name)) {
-    return ['add', 'ci', 'install'].includes(operation);
+    if ((name === 'yarn' || name === 'bun') && beforeDoubleDash.length === 0) return true;
+    return firstKnownOperation(
+      ['add', 'ci', 'i', 'in', 'ins', 'inst', 'insta', 'instal', 'install'],
+      [
+        'audit', 'config', 'diff', 'doctor', 'exec', 'help', 'info', 'list', 'ls', 'outdated',
+        'run', 'run-script', 'search', 'show', 'test', 'version', 'view', 'why',
+      ],
+    );
   }
-  if (['apt', 'apt-get', 'dnf', 'yum', 'zypper'].includes(name)) return operation === 'install';
-  if (name === 'apk') return operation === 'add';
-  if (name === 'poetry') return operation === 'add' || operation === 'install';
-  if (name === 'composer') return operation === 'install' || operation === 'require';
+  if (['apt', 'apt-get', 'dnf', 'yum', 'zypper'].includes(name)) {
+    return firstKnownOperation(['install'], ['check', 'help', 'info', 'list', 'search', 'show']);
+  }
+  if (name === 'apk') return firstKnownOperation(['add'], ['info', 'list', 'search', 'version']);
+  if (name === 'poetry') return firstKnownOperation(['add', 'install'], ['check', 'show', 'version']);
+  if (name === 'composer') return firstKnownOperation(['install', 'require'], ['show', 'validate']);
   return ['npx', 'pnpx', 'bunx'].includes(name);
 }
 
+function inlineInterpreterCommand(name, args) {
+  return args.some((arg) => (
+    arg === '-c'
+    || arg === '-e'
+    || (name === 'perl' && /^-E(?:.*)$/u.test(arg))
+    || (['perl', 'ruby'].includes(name) && /^-[^-]*[eE]/u.test(arg))
+    || arg === '--eval'
+    || /^-(?:c|e).+/u.test(arg)
+    || arg.startsWith('--eval=')
+    || ((name === 'node' || name === 'nodejs') && (
+      arg === '-p' || arg === '--print' || /^-p.+/u.test(arg) || arg.startsWith('--print=')
+    ))
+    || (name === 'php' && (
+      ['-B', '-E', '-R', '-r', '--process-begin', '--process-code', '--process-end'].includes(arg)
+      || /^-[BERr].+/u.test(arg)
+      || /^--process-(?:begin|code|end)=/u.test(arg)
+    ))
+  ));
+}
+
+function targetsAuditOrHistoryPath(value) {
+  if (typeof value !== 'string') return true;
+  const lower = value.replaceAll('\\', '/').toLowerCase();
+  return /(?:^|\/)(?:[^/]*(?:audit|history)[^/]*|logs?)(?:\/|$)/u.test(lower);
+}
+
+function shellRedirectTargetRisk(target, output) {
+  if (typeof target !== 'string' || target === '' || target.startsWith('&')) return true;
+  const lower = target.replaceAll('\\', '/').toLowerCase();
+  if (!output) return targetsCredentialMaterial(target);
+  if (lower === '/dev/null' || lower === 'nul') return false;
+  if (targetsAuditOrHistoryPath(lower)
+    || /(?:^|\/)\.ssh(?:\/|$)/u.test(lower)
+    || /^(?:~\/)?\.(?:bash|zsh|profile)/u.test(lower)
+    || /^(?:\/private)?\/(?:etc|var|usr|bin|sbin|system|library)(?:\/|$)/u.test(lower)) {
+    return true;
+  }
+  return targetsCredentialMaterial(target)
+    || targetsOpenClawConfigWrite(target) !== false
+    || targetsActiveAutomation(target) !== false;
+}
+
+function shellRedirectionRisk(segment) {
+  const { tokens, dynamicTokenIndexes, operatorTokenIndexes } = segment;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (!operatorTokenIndexes.has(index) || !SHELL_REDIRECTIONS.has(token)) continue;
+    if (token === '<<' || token === '<<<') return true;
+    const target = tokens[index + 1];
+    if (dynamicTokenIndexes.has(index + 1)) return true;
+    if (token === '>&' || token === '<&') {
+      if (typeof target !== 'string' || !/^(?:\d+|-)$/u.test(target)) return true;
+      index += 1;
+      continue;
+    }
+    if (shellRedirectTargetRisk(target, token !== '<')) return true;
+    index += 1;
+  }
+  return false;
+}
+
+function shellSegmentWithoutRedirections(segment) {
+  const tokens = [];
+  const dynamicTokenIndexes = new Set();
+  for (let index = 0; index < segment.tokens.length; index += 1) {
+    if (segment.fdTokenIndexes.has(index)
+      && segment.operatorTokenIndexes.has(index + 1)
+      && SHELL_REDIRECTIONS.has(segment.tokens[index + 1])) {
+      index += 2;
+      continue;
+    }
+    if (segment.operatorTokenIndexes.has(index)
+      && SHELL_REDIRECTIONS.has(segment.tokens[index])) {
+      index += 1;
+      continue;
+    }
+    if (segment.dynamicTokenIndexes.has(index)) dynamicTokenIndexes.add(tokens.length);
+    tokens.push(segment.tokens[index]);
+  }
+  return { ...segment, tokens, dynamicTokenIndexes };
+}
+
 function gitCommandRisk(args) {
+  if (args.some((arg) => /^--config-env=alias\./iu.test(arg)
+    || /^-calias\./iu.test(arg))) return true;
   let index = 0;
   while (index < args.length && args[index].startsWith('-')) {
-    if (['-C', '-c', '--git-dir', '--work-tree', '--namespace'].includes(args[index])) index += 2;
+    if (args[index] === '-c') {
+      if (typeof args[index + 1] !== 'string'
+        || args[index + 1].toLowerCase().startsWith('alias.')) return true;
+      index += 2;
+    } else if (['-C', '--git-dir', '--work-tree', '--namespace'].includes(args[index])) index += 2;
     else index += 1;
   }
   const operation = args[index];
@@ -568,12 +972,31 @@ function gitCommandRisk(args) {
     return operationArgs.includes('--force') || shortFlagIncludes(operationArgs, 'f');
   }
   if (operation === 'push') {
-    return operationArgs.some((arg) => arg === '--force'
-      || arg.startsWith('--force-with-lease')) || shortFlagIncludes(operationArgs, 'f');
+    return operationArgs.some((arg) => arg === '--delete' || arg === '--force'
+      || arg === '--mirror' || arg === '--prune'
+      || arg.startsWith('--force-with-lease') || arg.startsWith('+') || arg.startsWith(':'))
+      || shortFlagIncludes(operationArgs, 'f');
   }
+  if (operation === 'restore') return true;
+  if (operation === 'checkout') {
+    return operationArgs.includes('--') || operationArgs.includes('--force')
+      || shortFlagIncludes(operationArgs, 'Bf');
+  }
+  if (operation === 'switch') {
+    return operationArgs.includes('--discard-changes') || operationArgs.includes('--force-create')
+      || operationArgs.includes('--force')
+      || operationArgs.some((arg) => arg.startsWith('--force-create='))
+      || shortFlagIncludes(operationArgs, 'Cf');
+  }
+  if (operation === 'branch') {
+    return operationArgs.includes('--force')
+      || shortFlagIncludes(operationArgs, 'DMf')
+      || (operationArgs.includes('--delete') && operationArgs.includes('--force'));
+  }
+  if (operation === 'stash') return operationArgs.some((arg) => ['clear', 'drop'].includes(arg));
   if (operation !== 'config') return false;
   if (operationArgs.some((arg) => [
-    '--add', '--edit', '--remove-section', '--rename-section', '--replace-all', '--unset',
+    '-e', '--add', '--edit', '--remove-section', '--rename-section', '--replace-all', '--unset',
     '--unset-all',
   ].includes(arg))) return true;
   if (operationArgs.some((arg) => [
@@ -589,10 +1012,21 @@ function migrationCommand(name, args) {
   }
   if (name === 'alembic') return args.some((arg) => ['downgrade', 'stamp', 'upgrade'].includes(arg));
   if (['npm', 'pnpm', 'yarn', 'bun'].includes(name)) {
-    return args.some((arg) => /migrat/iu.test(arg));
+    const end = args.indexOf('--');
+    const scoped = args.slice(0, end < 0 ? args.length : end);
+    const runIndex = scoped.findIndex((arg) => arg === 'run' || arg === 'run-script');
+    const target = runIndex >= 0 ? scoped[runIndex + 1] : (
+      name === 'npm' ? null : scoped.find((arg) => !arg.startsWith('-'))
+    );
+    return typeof target === 'string'
+      && !/^(?:check|lint|test)(?::|$)/iu.test(target)
+      && /(?:^|:)migrat(?:e|ion)(?:[-:]|$)/iu.test(target);
   }
   if (['make', 'task', 'rake', 'rails'].includes(name)) {
-    return args.some((arg) => /(?:^|:)migrat/iu.test(arg));
+    const target = args.find((arg) => !arg.startsWith('-'));
+    return typeof target === 'string'
+      && !/^(?:check|lint|test)(?::|$)/iu.test(target)
+      && /(?:^|:)migrat(?:e|ion)(?:[-:]|$)/iu.test(target);
   }
   return (name === 'python' || name === 'python3')
     && args.some((arg) => /manage\.py$/iu.test(arg))
@@ -600,32 +1034,90 @@ function migrationCommand(name, args) {
 }
 
 function shellSegmentRisk(segment, depth) {
-  const view = shellCommandView(segment.tokens);
+  if (shellRedirectionRisk(segment)) return true;
+  const parsedSegment = shellSegmentWithoutRedirections(segment);
+  const view = shellCommandView(parsedSegment.tokens);
   if (view === null) return false;
-  const { name, args } = view;
-  if (segment.separatorBefore === '|' && (SHELL_INTERPRETERS.has(name) || name === 'eval')) {
+  const {
+    name, args, ambiguous = false, commandIndex,
+  } = view;
+  if (ambiguous || parsedSegment.dynamicTokenIndexes.has(commandIndex)) return true;
+  const hasDynamicArgs = [...parsedSegment.dynamicTokenIndexes]
+    .some((index) => index > commandIndex);
+  if (SHELL_CONTROL_WORDS.has(name)) return true;
+  if (segment.separatorBefore?.startsWith('|')
+    && (SHELL_INTERPRETERS.has(name) || INLINE_INTERPRETERS.has(name) || name === 'eval')) {
     return true;
   }
   if (name === 'eval') return true;
   if (SHELL_INTERPRETERS.has(name)) {
-    const commandIndex = args.findIndex((arg) => arg === '-c' || arg === '/c'
-      || arg === '-command');
-    if (commandIndex < 0) return false;
-    if (typeof args[commandIndex + 1] !== 'string') return null;
-    return shellCommandRisk(args[commandIndex + 1], depth + 1);
+    if (hasDynamicArgs) return true;
+    if ([...segment.operatorTokenIndexes].some((index) => (
+      ['<', '<&', '<>'].includes(segment.tokens[index])
+    ))) {
+      return true;
+    }
+    if (name === 'cmd') return args.some((arg) => /^\/(?:c|k)/iu.test(arg));
+    if (name === 'powershell' || name === 'pwsh') {
+      return args.some((arg) => /^(?:-|\/)(?:c|command|commandwithargs|cwa|e|ec|enc|encodedcommand)$/iu.test(arg)
+        || /^(?:-|\/)(?:c|command|commandwithargs|cwa|e|ec|enc|encodedcommand)[:=]/iu.test(arg));
+    }
+    if (name === 'fish' && args.some((arg) => (
+      /^-[^-]*C/u.test(arg) || arg === '--init-command' || arg.startsWith('--init-command=')
+    ))) return true;
+    return args.some((arg) => /^-[^-]*c[^-]*$/u.test(arg) || arg === '--command');
   }
   if (INLINE_INTERPRETERS.has(name)
-    && args.some((arg) => arg === '-c' || arg === '-e' || arg === '--eval')) return true;
+    && (hasDynamicArgs || inlineInterpreterCommand(name, args))) return true;
+  if (['awk', 'gawk', 'mawk', 'nawk'].includes(name)
+    && (hasDynamicArgs || args.some((arg) => /\bsystem\s*\(/iu.test(arg)))) return true;
   if (DELETE_COMMANDS.has(name)) return hasHelpOrVersion(args) ? false : true;
-  if (name === 'find' && args.includes('-delete')) return true;
+  if (name === 'find' && args.some((arg) => [
+    '-delete', '-exec', '-execdir', '-ok', '-okdir',
+  ].includes(arg))) return true;
+  if (name === 'find' && hasDynamicArgs) return true;
   if (name === 'history') {
-    return args.includes('--clear') || shortFlagIncludes(args, 'c');
+    const historyPrefixes = parsedSegment.tokens.slice(0, commandIndex);
+    const historyLimitOverride = historyPrefixes
+      .some((token) => /^(?:HISTSIZE|HISTFILESIZE)=/iu.test(token));
+    return hasDynamicArgs || args.includes('--clear') || shortFlagIncludes(args, 'cd')
+      || (historyLimitOverride && shortFlagIncludes(args, 'w'));
   }
   if (name === ':' && args.some((arg) => arg === '>' || arg === '>>')
     && args.some((arg) => /history/iu.test(arg))) return true;
-  if (name === 'truncate' && args.some((arg) => arg === '0')
-    && args.some((arg) => /(?:^|[\/])(?:[^\/]*history|logs?)(?:[\/]|$)/iu.test(arg))) return true;
-  if (name === 'git' && gitCommandRisk(args)) return true;
+  if (name === 'truncate') {
+    const zeroSize = args.some((arg, index) => (
+      /^(?:0+)(?:[bBkKmMgGtTpPeEzZyY](?:i?B)?)?$/u.test(arg)
+      && (args[index - 1] === '-s' || args[index - 1] === '--size')
+    )) || args.some((arg) => /^-s0+(?:[bBkKmMgGtTpPeEzZyY](?:i?B)?)?$/u.test(arg)
+      || /^--size=0+(?:[bBkKmMgGtTpPeEzZyY](?:i?B)?)?$/u.test(arg));
+    if (zeroSize && args.some(targetsAuditOrHistoryPath)) return true;
+  }
+  if (hasDynamicArgs && ['cp', 'dd', 'tee', 'truncate'].includes(name)) return true;
+  if (name === 'cp') {
+    const positionals = args.filter((arg) => !arg.startsWith('-'));
+    if (positionals.length >= 2 && targetsAuditOrHistoryPath(positionals.at(-1))) return true;
+  }
+  if (name === 'dd'
+    && args.some((arg) => arg.startsWith('of=') && targetsAuditOrHistoryPath(arg.slice(3)))) {
+    return true;
+  }
+  if (name === 'tee' && args.some((arg) => !arg.startsWith('-')
+    && targetsAuditOrHistoryPath(arg))) return true;
+  const hasGitConfigOverride = name === 'git'
+    && parsedSegment.tokens.slice(0, commandIndex)
+      .some((token) => /^GIT_CONFIG_[A-Za-z0-9_]*=/u.test(token));
+  if (name === 'git' && (hasDynamicArgs || hasGitConfigOverride || gitCommandRisk(args))) {
+    return true;
+  }
+  if (hasDynamicArgs && (
+    name === 'alembic' || name.includes('migrat')
+    || ['dbmate', 'flyway', 'liquibase', 'make', 'rake', 'rails', 'task'].includes(name)
+  )) return true;
+  if (hasDynamicArgs && PACKAGE_MANAGER_COMMANDS.has(name)) return true;
+  if (hasDynamicArgs && (
+    PERMISSION_COMMANDS.has(name) || name === 'truncate' || packageInstallCommand(name, args)
+  )) return true;
   if (packageInstallCommand(name, args)) return true;
   if (name === 'printenv') return !hasHelpOrVersion(args);
   if (name === 'env') return !hasHelpOrVersion(args);
@@ -750,7 +1242,8 @@ function internalWebFetchUrl(value) {
     if (version !== 0) {
       return INTERNAL_NETWORKS.check(hostname, version === 4 ? 'ipv4' : 'ipv6');
     }
-    if (hostname === 'localhost' || hostname === 'metadata' || !hostname.includes('.')) return true;
+    if (hostname === 'localhost' || hostname === 'metadata' || hostname === 'home.arpa'
+      || !hostname.includes('.')) return true;
     return INTERNAL_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
   } catch {
     return null;
@@ -948,6 +1441,14 @@ export function applyLocalSafetyDowngrade(result, toolName, visibleParams, local
     if (!actionName.ok
       || typeof actionName.value !== 'string'
       || !READ_ONLY_PROCESS_ACTIONS.has(actionName.value)) return localReview(result);
+    return result;
+  }
+
+  if (toolName === 'skill_workshop') {
+    const actionName = ownDataValue(action.params, 'action');
+    if (!actionName.ok
+      || typeof actionName.value !== 'string'
+      || !READ_ONLY_SKILL_WORKSHOP_ACTIONS.has(actionName.value)) return localReview(result);
     return result;
   }
 

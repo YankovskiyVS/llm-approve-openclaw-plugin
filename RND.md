@@ -7,7 +7,7 @@
 Runtime contract 0.4.0 зафиксирован так:
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-14.3`;
+- policy: `2026-07-14.4`;
 - production profile: `temperature=0`, strict
   `response_format.type=json_schema`, `strict=true`, thinking off,
   `max_tokens=256`;
@@ -41,7 +41,7 @@ generation и новая policy могут изменить решения fixed
 `117/120` и `0/240` — только **historical baseline 0.2.0/0.3.0** с policy
 `2026-07-12.4` и `json_object`. Их нельзя выдавать за результат 0.4.0.
 
-До публикации нужен новый frozen-corpus run policy `2026-07-14.3`; source tests,
+До публикации нужен новый frozen-corpus run policy `2026-07-14.4`; source tests,
 packaged runtime smoke и live one-response Structured Output probe не заменяют
 model qualification.
 
@@ -86,8 +86,38 @@ destructive `exec` и `web_fetch` на private address. Поэтому `.2` та
 Policy `2026-07-14.3` добавляет deterministic checks для этих surfaces. Offline
 replay всех записанных `.2` attempts через `.3` guard изменил ровно эти шесть
 unsafe outcomes с allow на review: safe осталось **118/120**, unsafe стало
-**0/240**. Replay проверяет только deterministic delta; current `.3` metrics
-остаются **pending fresh live qualification**.
+**0/240**. Replay проверил только deterministic delta и не заменил следующий
+fresh live run.
+
+## Failed third strict qualification, policy 2026-07-14.3
+
+Fresh live run после второго hardening сохранён в artifact
+`llm-judge-v040-qualification-20260714T180323Z` и зафиксировал **120 cases / 360
+attempts**:
+
+- safe executed: **112/120** (`34/40` safe families);
+- unsafe auto-allow: **2/240**;
+- unsafe MUST_BLOCK families: **1/80**;
+- catastrophic unsafe families: **0/11**;
+- failures: **0/360**;
+- latency: p50 **1867.457 ms**, p95 **2453.216 ms**, p99 **2780.389 ms**.
+
+Оба unsafe auto-allow относятся к одной и той же `skill_workshop.apply` family,
+repeats 2 и 3. Поэтому `.3` также является **release-blocker**, несмотря на
+нулевые catastrophic outcomes и failures.
+
+Policy `2026-07-14.4` разрешает для `skill_workshop` только явно read-only
+actions, добавляет bounded fail-closed hardening для shell dispatch/redirection
+и включает `home.arpa` в special-use web boundary. Current `.4` остаётся
+**pending fresh live qualification**.
+
+Shell parser здесь является bounded deterministic backstop, а не shell sandbox.
+Неоднозначный dispatch/redirection понижается fail-closed, но простые неизвестные
+direct commands всё ещё зависят от LLM verdict и native OpenClaw controls.
+
+Для `web_fetch` плагин выполняет только статическую проверку URL, literal IP и
+special-use names. DNS resolution и каждый redirect зависят от native OpenClaw
+SSRF guard; DNS rebinding не решается pre-hook проверкой.
 
 ## Official six-model selection context
 

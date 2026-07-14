@@ -57,7 +57,7 @@ test('exports one immutable draft-07 verdict contract and derived vocabulary', a
   assert.deepEqual(JUDGE_RISKS, ['low', 'medium', 'high', 'critical']);
   assert.deepEqual(JUDGE_AUTHORIZATIONS, ['unknown', 'low', 'medium', 'high']);
   assert.equal(POLICY_VERSION, JUDGE_VERDICT_SCHEMA.properties.policy_version.const);
-  assert.equal(POLICY_VERSION, '2026-07-14.3');
+  assert.equal(POLICY_VERSION, '2026-07-14.4');
 
   assertDeepFrozen(JUDGE_VERDICT_SCHEMA);
   assertDeepFrozen(JUDGE_VERDICT_KEYS);

@@ -7,7 +7,7 @@
 ### Added
 
 - Canonical portable `schemas/judge-verdict.schema.json` с policy
-  `2026-07-14.3` поставляется внутри runtime `.tgz`.
+  `2026-07-14.4` поставляется внутри runtime `.tgz`.
 - Pinned production dependency `ajv@8.20.0` повторно валидирует provider output
   локально; Python/Pydantic runtime или sidecar не добавлены.
 - Package/runtime smoke покрывает schema-invalid response и supervised
@@ -28,6 +28,11 @@
   теперь проверяет non-read-only `process` actions, destructive/anti-forensics/
   install/migration shell commands, writes to `openclaw.json` и private/internal
   `web_fetch` targets; policy поднята с `2026-07-14.2` до `2026-07-14.3`.
+- Fresh `.3` qualification выявила два unsafe auto-allows в одной
+  `skill_workshop.apply` family. Policy `2026-07-14.4` разрешает только read-only
+  `skill_workshop` actions, добавляет bounded fail-closed shell
+  dispatch/redirection hardening и включает `home.arpa` в special-use web
+  boundary.
 - Public ENV contract, два hook, fixed model и thresholds не изменились.
 
 ### Security and evidence
@@ -42,8 +47,18 @@
   release-blocker. Второй strict run на policy `2026-07-14.2` дал `118/120`
   safe и `6/240` unsafe auto-allows (`4/80` unsafe families, `0/11`
   catastrophic, `0` failures), поэтому также не прошёл. Offline replay `.2`
-  attempts через current policy `2026-07-14.3` сохранил `118/120` safe и снизил
-  unsafe auto-allow до `0/240`; fresh `.3` qualification всё ещё обязательна.
+  attempts через policy `2026-07-14.3` сохранил `118/120` safe и снизил unsafe
+  auto-allow до `0/240`, но fresh `.3` run всё равно стал release-blocker:
+  artifact `llm-judge-v040-qualification-20260714T180323Z` дал `112/120` safe
+  (`34/40` families), `2/240` unsafe в одной `skill_workshop.apply` family
+  (`1/80`, repeats 2 и 3), `0/11` catastrophic, `0/360` failures, p50
+  `1867.457 ms`, p95 `2453.216 ms`, p99 `2780.389 ms`. Current policy
+  `2026-07-14.4` остаётся pending fresh live qualification.
+- Shell parser остаётся bounded deterministic backstop, а не shell sandbox;
+  simple unknown direct commands зависят от LLM/native controls. Web guard
+  статически проверяет URL/IP/special-use names, а DNS resolution и каждый
+  redirect зависят от native OpenClaw SSRF guard; pre-hook не решает DNS
+  rebinding.
 
 ## 0.3.0 — 2026-07-12
 

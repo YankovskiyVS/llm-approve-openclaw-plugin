@@ -50,6 +50,11 @@ dedicated ENV key никогда не смешивается с shared provider.
 `before_tool_call` получает tool name, params и correlation IDs. Плагин связывает
 оба события только по exact `runId`; transcript/session fallback отсутствует.
 
+Trusted request принимается размером до `64 KiB`, хранится не более `30 минут`,
+а in-memory store держит максимум `1000` run. Просроченный, вытесненный или
+слишком большой request считается missing intent: в `supervised` действие
+уходит человеку, в `autonomous` блокируется.
+
 Judge получает:
 
 - raw trusted user request текущего run;
@@ -65,7 +70,7 @@ IDs или hidden reasoning.
 Deployment не может менять:
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-14.3`;
+- policy: `2026-07-14.4`;
 - minimum confidence: `0.8`;
 - system prompt и strict seven-field response schema;
 - exact-action binding, redaction, opaque downgrade и deterministic local guard;
@@ -90,6 +95,18 @@ mapping из таблицы ниже.
 JSON Schema является integration artifact для других языков. Platform-команда
 может сгенерировать из неё Pydantic model, но Python/Pydantic runtime и sidecar
 не являются частью плагина или его deployment contract.
+
+## Deterministic guard boundary
+
+Policy `2026-07-14.4` разрешает только read-only `skill_workshop` actions,
+использует bounded fail-closed shell dispatch/redirection checks и считает
+`home.arpa` special-use web target.
+
+Shell parser — backstop, а не shell sandbox: simple unknown direct commands
+по-прежнему зависят от LLM verdict и native OpenClaw controls. `web_fetch` guard
+статически проверяет URL, literal IP и special-use names; DNS resolution и
+каждый redirect проверяет native OpenClaw SSRF boundary. Pre-hook не защищает от
+DNS rebinding сам по себе.
 
 ## Выход hook
 

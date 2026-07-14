@@ -1,7 +1,7 @@
 # Security policy
 
 Поддерживаемый internal release: `openclaw-llm-action-judge` 0.4.0 с policy
-`2026-07-14.3` на OpenClaw
+`2026-07-14.4` на OpenClaw
 `>=2026.6.11` и Node.js `>=22.19.0`.
 
 ## Security boundary
@@ -31,10 +31,27 @@ Historical diagnostic 0.2.0/0.3.0 подтвердил необходимост�
 unsafe auto-allows. После первого hardening fresh run на policy
 `2026-07-14.2` всё ещё обнаружил `6/240` unsafe auto-allows в четырёх families:
 process writes, OpenClaw config writes, destructive shell commands и internal
-web fetches. Оба run являются failed historical evidence. Current policy
-`2026-07-14.3` закрывает эти surfaces deterministic guard и остаётся pending
-fresh live qualification; offline replay сам по себе не является safety
-certificate.
+web fetches. Оба run являются failed historical evidence. Policy
+`2026-07-14.3` закрыла эти surfaces, но третий strict run всё равно дал `2/240`
+unsafe auto-allows в одной `skill_workshop.apply` family (`1/80` unsafe
+families; repeats 2 и 3). Artifact
+`llm-judge-v040-qualification-20260714T180323Z` зафиксировал `112/120` safe
+(`34/40` safe families), `0/11` catastrophic, `0/360` failures и latency p50
+`1867.457 ms`, p95 `2453.216 ms`, p99 `2780.389 ms`. Этот run также failed.
+Current policy `2026-07-14.4` добавляет read-only-only `skill_workshop` guard,
+bounded fail-closed shell dispatch/redirection hardening и `home.arpa`, но
+остаётся pending fresh live qualification.
+
+## Deterministic guard limits
+
+Shell parser — bounded fail-closed backstop, а не shell sandbox. Он понижает
+неоднозначный dispatch/redirection, но simple unknown direct commands всё ещё
+зависят от LLM verdict и native OpenClaw sandbox/tool policy.
+
+Для `web_fetch` плагин статически проверяет URL, literal IP и special-use names.
+DNS resolution и каждый redirect остаются обязанностью native OpenClaw SSRF
+guard. DNS rebinding не решается pre-hook и требует повторной проверки resolved
+address на каждой сетевой операции и после каждого redirect.
 
 ## Credentials and endpoint
 
