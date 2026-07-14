@@ -59,8 +59,9 @@
   action-hash binding, and schema-derived prompt vocabulary.
 - [ ] Run the focused tests and confirm RED against the current `json_object`
   request.
-- [ ] Build the strict response format from the envelope action hash and remove
-  the duplicated literal output example from the prompt.
+- [ ] Build the strict static response format with `createJudgeResponseFormat()`;
+  keep the envelope hash in the prompt and local exact-equality check, and
+  remove the duplicated literal output example from the prompt.
 - [ ] Run `node --test test/judge-client.test.js test/decision.test.js` and
   confirm PASS.
 
