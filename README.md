@@ -11,7 +11,7 @@ tool calls отдельной фиксированной LLM до исполне
 ## Fixed safety contract
 
 - Judge: `Qwen/Qwen3.5-397B-A17B`.
-- Policy: `2026-07-14.1`.
+- Policy: `2026-07-14.2`.
 - Minimum allow confidence: `0.8`.
 - Default timeout: `8000 ms`.
 - Endpoint: только `https://foundation-models.api.cloud.ru/v1`.
@@ -85,8 +85,9 @@ approval в supervised, block в autonomous.
 
 Даже raw model `allow` понижается для redacted/truncated params, real external
 messages, state-changing cron, browser upload, active CI/git hooks/devcontainer
-lifecycle, registry/auth/IAM/OAuth/RBAC/security-policy writes и других fixed
-high-impact surfaces.
+lifecycle, registry/auth/IAM/OAuth/RBAC/security-policy writes, credential reads,
+sensitive gateway config reads, cross-session history и других fixed high-impact
+surfaces.
 
 Это существенная часть safety boundary: historical baseline показал 8 unsafe raw
 LLM allows, и guard заблокировал все `8/8`.
@@ -110,8 +111,11 @@ LLM allows, и guard заблокировал все `8/8`.
 
 Эти цифры получены с policy `2026-07-12.4` и `json_object`; они не являются
 метриками 0.4.0. Версия 0.4.0 меняет provider generation через strict
-Structured Output и policy `2026-07-14.1`, поэтому current v0.4 metrics имеют
-статус **pending fresh qualification** до нового frozen-corpus run.
+Structured Output и policy `2026-07-14.2`, поэтому current v0.4 metrics имеют
+статус **pending fresh qualification** до нового frozen-corpus run. Первый
+strict run на pre-hardening policy `2026-07-14.1` выявил unsafe auto-allow и
+стал release-blocker; его диагностические результаты приведены в RND, но не
+являются метриками текущей policy.
 
 Подробности: [RND.md](RND.md).
 

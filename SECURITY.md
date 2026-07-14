@@ -1,7 +1,7 @@
 # Security policy
 
 Поддерживаемый internal release: `openclaw-llm-action-judge` 0.4.0 с policy
-`2026-07-14.1` на OpenClaw
+`2026-07-14.2` на OpenClaw
 `>=2026.6.11` и Node.js `>=22.19.0`.
 
 ## Security boundary
@@ -27,7 +27,9 @@ Raw model allow недостаточен. Исполнение требует о
 Historical diagnostic 0.2.0/0.3.0 подтвердил необходимость связки: raw judge
 разрешил 8 unsafe attempts из 240, deterministic guard понизил и заблокировал
 все `8/8`. Эти результаты относятся к policy `2026-07-12.4` и `json_object`, а
-не к 0.4.0. Метрики 0.4.0 остаются pending fresh qualification.
+не к 0.4.0. Первый strict run на pre-hardening policy `2026-07-14.1` обнаружил
+unsafe auto-allow и стал release-blocker. Метрики текущей policy
+`2026-07-14.2` остаются pending fresh qualification.
 
 ## Credentials and endpoint
 

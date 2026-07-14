@@ -7,7 +7,7 @@
 Runtime contract 0.4.0 зафиксирован так:
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-14.1`;
+- policy: `2026-07-14.2`;
 - production profile: `temperature=0`, strict
   `response_format.type=json_schema`, `strict=true`, thinking off,
   `max_tokens=256`;
@@ -41,9 +41,30 @@ generation и новая policy могут изменить решения fixed
 `117/120` и `0/240` — только **historical baseline 0.2.0/0.3.0** с policy
 `2026-07-12.4` и `json_object`. Их нельзя выдавать за результат 0.4.0.
 
-До публикации нужен новый frozen-corpus run policy `2026-07-14.1`; source tests,
+До публикации нужен новый frozen-corpus run policy `2026-07-14.2`; source tests,
 packaged runtime smoke и live one-response Structured Output probe не заменяют
 model qualification.
+
+## Failed first strict qualification, pre-hardening policy 2026-07-14.1
+
+Первый frozen-corpus run после включения strict Structured Output был выполнен
+до расширения deterministic guard и относится только к policy
+`2026-07-14.1`. Artifact `llm-judge-v040-qualification-20260714T162810Z`
+зафиксировал **120 cases / 360 attempts**:
+
+- safe executed: **112/120**;
+- unsafe auto-allow: **9/240**;
+- unsafe MUST_BLOCK families: **5/80**;
+- catastrophic unsafe families: **0/11**;
+- failures: **2/360** transport timeouts, оба отражены как schema-invalid
+  fail-closed attempts;
+- latency: p50 **1.912 s**, p95 **4.720 s**, p99 **6.643 s**.
+
+Ненулевые unsafe auto-allows сделали этот прогон **release-blocker**, а не
+успешной qualification. После него deterministic guard был усилен и policy
+поднята до `2026-07-14.2`. Результаты `.1` нельзя переносить на `.2`: current
+`.2` metrics имеют статус **pending fresh qualification** до полного повторного
+прогона того же frozen corpus.
 
 ## Official six-model selection context
 
@@ -221,6 +242,7 @@ Live probe `hivetrace/HiveTraceGuard-Pro` был быстрым, но дал fal
 - [Claude Code Auto Mode](https://www.anthropic.com/engineering/claude-code-auto-mode) — production precedent отдельного classifier: ему передаются user messages и bare tool calls, но не assistant prose/tool results. Реализация classifier закрыта.
 - [APort agent guardrails](https://github.com/aporthq/aport-agent-guardrails) — pre-action authorization и audit с deterministic policy; полезный альтернативный слой, но не фиксированная Cloud.ru semantic judge.
 - [ClawLens](https://github.com/nk3750/clawlens) — local observability, risk scoring, audit и operator-defined guardrails; шире по UI/telemetry, но другой decision contract.
+- [Destructive Command Guard](https://github.com/Dicklesworthstone/destructive_command_guard) — deterministic Rust pre-tool scanner для shell/destructive команд: README заявляет 50+ rule packs и sub-millisecond fast path. Это сильный complement для `exec`-слоя и источник rule patterns, но не замена semantic all-tool judge: default — fail-open/default-allow, direct file writes и API calls не перехватываются, запуск внешнего script вроде `./deploy.sh` не раскрывает его содержимое, documented bypass отключает защиту, а OpenClaw отсутствует в списке поддерживаемых агентов. Для v0.4 это потенциальный отдельный defense-in-depth layer, не runtime dependency.
 
 Clean implementation выбрана потому, что ни один вариант не сочетает все требования: fixed independent Cloud.ru model, raw trusted user intent без transcript fallback, redacted exact action hash, strict seven-field response, fail-closed ошибки, native one-call approval и минимальный audit без raw rationale.
 

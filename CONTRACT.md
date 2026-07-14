@@ -65,7 +65,7 @@ IDs или hidden reasoning.
 Deployment не может менять:
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-14.1`;
+- policy: `2026-07-14.2`;
 - minimum confidence: `0.8`;
 - system prompt и strict seven-field response schema;
 - exact-action binding, redaction, opaque downgrade и deterministic local guard;

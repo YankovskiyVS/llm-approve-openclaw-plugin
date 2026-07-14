@@ -7,7 +7,7 @@
 ### Added
 
 - Canonical portable `schemas/judge-verdict.schema.json` с policy
-  `2026-07-14.1` поставляется внутри runtime `.tgz`.
+  `2026-07-14.2` поставляется внутри runtime `.tgz`.
 - Pinned production dependency `ajv@8.20.0` повторно валидирует provider output
   локально; Python/Pydantic runtime или sidecar не добавлены.
 - Package/runtime smoke покрывает schema-invalid response и supervised
@@ -21,8 +21,10 @@
   format остаётся static между actions для reuse provider grammar.
 - OpenClaw peer помечен optional для npm, чтобы archive install ставил Ajv, но не
   скачивал вложенную копию host OpenClaw.
-- Public ENV contract, два hook, fixed model, thresholds и deterministic guard не
-  изменились.
+- После failed strict qualification deterministic guard расширен для credential
+  reads, sensitive gateway config reads и cross-session history; policy поднята
+  с `2026-07-14.1` до `2026-07-14.2`.
+- Public ENV contract, два hook, fixed model и thresholds не изменились.
 
 ### Security and evidence
 
@@ -30,8 +32,11 @@
   risk, authorization, confidence, opaque-data и deterministic guards остаются
   обязательными и fail-closed.
 - Результаты `117/120` safe и `0/240` unsafe относятся только к historical
-  baseline 0.2.0/0.3.0 (`2026-07-12.4`, `json_object`). Метрики 0.4.0 имеют
-  статус pending fresh qualification до нового frozen-corpus run.
+  baseline 0.2.0/0.3.0 (`2026-07-12.4`, `json_object`). Первый strict run на
+  pre-hardening policy `2026-07-14.1` дал `112/120` safe и `9/240` unsafe
+  auto-allows (`5/80` unsafe families, `0/11` catastrophic) и стал
+  release-blocker. Метрики current policy `2026-07-14.2` имеют статус pending
+  fresh qualification до повторного frozen-corpus run.
 
 ## 0.3.0 — 2026-07-12
 

@@ -165,7 +165,7 @@ test('release builder publishes one versioned tarball and matching sha256 into a
   ]);
   assert.equal(packagedSchema, sourceSchema);
   const parsedSchema = JSON.parse(packagedSchema);
-  assert.equal(parsedSchema.properties.policy_version.const, '2026-07-14.1');
+  assert.equal(parsedSchema.properties.policy_version.const, '2026-07-14.2');
   assert.equal(parsedSchema.additionalProperties, false);
   for (const file of EXPECTED_PACKAGE_FILES) {
     const content = await fs.readFile(path.join(extracted, 'package', file), 'utf8');
@@ -197,7 +197,7 @@ test('manifest keeps model and policy immutable outside public config', async ()
   );
   assert.deepEqual(Object.keys(manifest.configSchema.properties).sort(), ['enforcement', 'mode']);
   assert.equal(JSON.stringify(manifest).includes('Qwen/Qwen3.5-397B-A17B'), false);
-  assert.equal(JSON.stringify(manifest).includes('2026-07-14.1'), false);
+  assert.equal(JSON.stringify(manifest).includes('2026-07-14.2'), false);
 });
 
 test('runtime smoke pins v0.4 and fails closed for schema-invalid judge output', async (t) => {
@@ -238,7 +238,7 @@ test('release docs state the v0.4 structured-output contract and historical evid
     assert.match(document, /0\.4\.0/u);
   }
   for (const document of [readme, contract, security, rnd, changelog]) {
-    assert.match(document, /2026-07-14\.1/u);
+    assert.match(document, /2026-07-14\.2/u);
   }
   for (const document of [readme, contract, security]) {
     assert.match(document, /json_schema/u);
@@ -250,6 +250,11 @@ test('release docs state the v0.4 structured-output contract and historical evid
   assert.match(deployment, /releases\/v0\.4\.0/u);
   assert.match(deployment, /0\.4\.0[^\n]*0\.3\.0/u);
   assert.match(rnd, /pending fresh qualification/iu);
+  assert.match(rnd, /2026-07-14\.1[\s\S]*release-blocker/iu);
+  assert.match(rnd, /112\/120[\s\S]*9\/240[\s\S]*5\/80[\s\S]*0\/11/iu);
+  assert.match(rnd, /p50[\s\S]*1\.912[\s\S]*p95[\s\S]*4\.720[\s\S]*p99[\s\S]*6\.643/iu);
+  assert.match(rnd, /destructive_command_guard/iu);
+  assert.match(rnd, /fail-open[\s\S]*default-allow/iu);
   assert.match(rnd, /historical baseline 0\.2\.0\/0\.3\.0/iu);
   assert.match(changelog, /## 0\.4\.0 — 2026-07-14/u);
 });
