@@ -7,6 +7,7 @@ import {
   JUDGE_RISKS,
   JUDGE_VERDICT_KEYS,
   JUDGE_VERDICT_SCHEMA,
+  createJudgeSchemaContract,
   createJudgeResponseFormat,
   validateJudgeVerdict,
 } from '../src/judge-schema.js';
@@ -97,6 +98,13 @@ test('rejects missing and additional verdict fields', () => {
   );
 });
 
+test('rejects verdict fields inherited only through the prototype', () => {
+  const candidate = Object.create(verdict());
+
+  assert.deepEqual(Object.keys(candidate), []);
+  assert.throws(() => validateJudgeVerdict(candidate), TypeError);
+});
+
 test('rejects wrong types, closed-enum violations, ranges, policy, and hash shape', () => {
   const invalid = [
     null,
@@ -163,6 +171,59 @@ test('normalizes validation failures to a generic non-model-controlled error', (
       && error.message === 'invalid judge verdict'
       && !error.message.includes(secret),
   );
+});
+
+test('contains schema and dependency initialization failures until contract use', async (t) => {
+  const schemaUrl = new URL('../schemas/judge-verdict.schema.json', import.meta.url);
+  const schemaText = await readFile(schemaUrl, 'utf8');
+  const secret = 'schema-initialization-secret-never-print';
+
+  const driftedSchema = JSON.parse(schemaText);
+  driftedSchema.properties.policy_version.const = 'unexpected-bootstrap-policy';
+  const cases = [
+    ['schema read', {
+      readSchema() { throw new Error(secret); },
+    }],
+    ['schema parse', {
+      readSchema() { return `{\"${secret}\":`; },
+    }],
+    ['Ajv load', {
+      readSchema() { return schemaText; },
+      loadAjv() { throw new Error(secret); },
+    }],
+    ['Ajv compile', {
+      readSchema() { return schemaText; },
+      loadAjv() {
+        return class FailingAjv {
+          compile() { throw new Error(secret); }
+        };
+      },
+    }],
+    ['bootstrap vocabulary drift', {
+      readSchema() { return JSON.stringify(driftedSchema); },
+    }],
+  ];
+
+  for (const [name, dependencies] of cases) {
+    await t.test(name, () => {
+      let contract;
+      assert.doesNotThrow(() => {
+        contract = createJudgeSchemaContract(dependencies);
+      });
+      assert.equal(contract.schema, null);
+      for (const useContract of [
+        () => contract.validateJudgeVerdict(verdict()),
+        () => contract.createJudgeResponseFormat(),
+      ]) {
+        assert.throws(
+          useContract,
+          (error) => error instanceof TypeError
+            && error.message === 'judge verdict contract unavailable'
+            && !error.message.includes(secret),
+        );
+      }
+    });
+  }
 });
 
 test('creates the exact strict static provider response format', () => {

@@ -6,6 +6,7 @@ import {
   createAction,
   createJudgeEnvelope,
 } from '../src/action.js';
+import { POLICY_VERSION } from '../src/constants.js';
 
 test('canonicalStringify recursively sorts object keys and preserves array order', () => {
   const first = {
@@ -106,7 +107,7 @@ test('createAction binds every exact field and defensively copies params', () =>
   const action = createAction({ event, ctx });
 
   assert.deepEqual(action, {
-    policy_version: '2026-07-12.4',
+    policy_version: POLICY_VERSION,
     tool_name: 'exec',
     params: {
       array: ['first', { value: true }],
@@ -217,7 +218,7 @@ test('createJudgeEnvelope exposes only the hash, tool, policy, and redacted para
     'tool_name',
     'params',
   ]);
-  assert.equal(envelope.policy_version, '2026-07-12.4');
+  assert.equal(envelope.policy_version, POLICY_VERSION);
   assert.equal(envelope.action_hash, computeActionHash(action));
   assert.equal(envelope.tool_name, 'exec');
   assert.equal(envelope.params.token, '[REDACTED]');

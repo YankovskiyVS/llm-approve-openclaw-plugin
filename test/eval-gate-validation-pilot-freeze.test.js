@@ -13,6 +13,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { canonicalStringify } from '../src/action.js';
+import { POLICY_VERSION } from '../src/constants.js';
 import { corpusHash, lintCorpus } from '../evals/lib/corpus.mjs';
 
 const SOURCE_ROOT = new URL('../evals/corpus-v2/', import.meta.url);
@@ -79,7 +80,7 @@ function makeFixture() {
   const generationProvenance = {
     schema_version: 'gate-validation-pilot-generation-provenance.v1',
     final_review: {
-      policy_version: '2026-07-12.4',
+      policy_version: POLICY_VERSION,
       candidate_sha256: sha256(Buffer.from(render(cases), 'utf8')),
       corpus_sha256: corpusHash(lintCorpus(cases)),
       reviewers: [
