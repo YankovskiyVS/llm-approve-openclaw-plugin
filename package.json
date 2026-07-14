@@ -1,6 +1,6 @@
 {
   "name": "openclaw-llm-action-judge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "LLM-gated tool-call approval for OpenClaw",
   "license": "UNLICENSED",
@@ -14,6 +14,7 @@
     ".env.example",
     "index.js",
     "openclaw.plugin.json",
+    "schemas/",
     "src/",
     "README.md",
     "CONTRACT.md",
@@ -38,6 +39,11 @@
   },
   "peerDependencies": {
     "openclaw": ">=2026.6.11"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "openclaw": {
     "extensions": [

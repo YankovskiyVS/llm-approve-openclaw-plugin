@@ -1,32 +1,49 @@
 # R&D: LLM-judge для auto approve tool calls
 
-Дата актуализации: **12 июля 2026**.
+Дата актуализации: **14 июля 2026**.
 
-## Current 0.3.0 handoff
+## Current 0.4.0 handoff
 
-Runtime contract 0.3.0 зафиксирован так:
+Runtime contract 0.4.0 зафиксирован так:
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-12.4`;
-- production profile: `temperature=0`, JSON object, thinking off, `max_tokens=256`;
+- policy: `2026-07-14.1`;
+- production profile: `temperature=0`, strict
+  `response_format.type=json_schema`, `strict=true`, thinking off,
+  `max_tokens=256`;
+- canonical contract: packaged `schemas/judge-verdict.schema.json`, повторная
+  local validation через pinned `ajv@8.20.0`;
 - judge timeout: `8000 ms`;
 - minimum OpenClaw: `2026.6.11`;
 - code defaults: `mode=autonomous`, `enforcement=shadow`;
 - recommended credential source: dedicated `OPENCLAW_JUDGE_API_KEY`, с atomic
   fallback на shared `models.providers.cloudru`;
 - strict ENV profiles, bounded timeout, confined audit path и lifecycle logging;
-- package suite: **520 tests passed**.
+- public ENV и оба hook не изменились относительно 0.3.0.
 
-Model/policy/prompt/parser/normalizer/guard не изменялись относительно 0.2.0.
-Поэтому результаты 360 model attempts ниже остаются qualification baseline
-0.2.0. Для 0.3.0 публикуется отдельное integration/runtime evidence; full model
-run не переименовывается в новую qualification.
+Fallback на `json_object` отсутствует. Provider/schema/Ajv failure остаётся
+fail-closed. Schema-valid output не означает safe: exact hash, rationale,
+risk, authorization, confidence, opaque params и deterministic guard продолжают
+проверяться отдельно. Python/Pydantic runtime или sidecar в плагин не добавлялись;
+platform-команда может генерировать свои типы из JSON Schema.
 
-Source checkout сохраняет `npm test` и `eval:*` команды. Runtime `.tgz` содержит только reviewed 18-file allowlist; `test/`, `evals/`, corpora и dev-only scripts в handoff artifact не публикуются.
+Source checkout сохраняет `npm test` и `eval:*` команды. Runtime `.tgz` содержит
+только reviewed 24-file allowlist; `test/`, `evals/`, corpora и dev-only scripts
+в handoff artifact не публикуются. Ajv устанавливается как pinned production
+dependency; OpenClaw peer помечен optional для npm и связывается host runtime.
 
 `autonomous + shadow` только вычисляет и аудитит would-be autonomous outcome; он не включает blocking enforcement. Плагин остаётся дополнительным слоем поверх native sandbox, tool policy и approval.
 
-Policy `2026-07-12.4` вернула короткую формулировку prompt из линии `.1`: causal A/B показал, что расширенный prompt снижал recall безопасных действий. При этом strict deterministic local guard сохранён отдельно от prompt: opaque params, real message sends, unknown/state-changing message actions, non-message `dryRun`, cron writes, browser uploads, active CI/hooks/registry/devcontainer lifecycle и security-policy writes не могут пройти на одном model `allow`.
+## Current qualification boundary
+
+Статус safety metrics 0.4.0: **pending fresh qualification**. Provider-constrained
+generation и новая policy могут изменить решения fixed model, поэтому старые
+`117/120` и `0/240` — только **historical baseline 0.2.0/0.3.0** с policy
+`2026-07-12.4` и `json_object`. Их нельзя выдавать за результат 0.4.0.
+
+До публикации нужен новый frozen-corpus run policy `2026-07-14.1`; source tests,
+packaged runtime smoke и live one-response Structured Output probe не заменяют
+model qualification.
 
 ## Official six-model selection context
 
@@ -41,7 +58,11 @@ Official preflight на OpenClaw `2026.6.11` допустил шесть candida
 
 После official selection и gate-policy tuning fixed winner изменён с historical GLM-5.1 на `Qwen/Qwen3.5-397B-A17B`. Historical таблицы ниже сохранены как provenance раннего R&D и не описывают текущий winner.
 
-## Final gate-validation live diagnostic
+## Historical final gate-validation live diagnostic for 0.2.0/0.3.0
+
+Policy `2026-07-12.4` вернула короткую формулировку prompt из линии `.1`: causal
+A/B показал, что расширенный prompt снижал recall безопасных действий. Strict
+deterministic local guard оставался отдельным от prompt.
 
 Final run использовал policy `2026-07-12.4`, timeout `8000 ms` и четыре 30-case chunks с тремя repeats: **120 cases / 360 live Cloud.ru attempts**.
 
@@ -213,7 +234,9 @@ Historical runner находится в `evals/dev-smoke.mjs`. Он не сод�
 LLM_API_KEY="$LLM_API_KEY" npm run eval:smoke
 ```
 
-Production client использует `temperature=0`, JSON mode, thinking off и `max_tokens=256`: более длинный output budget, чем межмодельное сравнение, потому что обязан вернуть семь полей и rationale.
+Historical production client той ревизии использовал `temperature=0`,
+`json_object`, thinking off и `max_tokens=256`: более длинный output budget, чем
+межмодельное сравнение, потому что обязан был вернуть семь полей и rationale.
 
 ### Диагностика до финального TDD-fix
 

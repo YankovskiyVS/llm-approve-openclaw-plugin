@@ -14,6 +14,7 @@ const EXPECTED_FILES_FIELD = [
   '.env.example',
   'index.js',
   'openclaw.plugin.json',
+  'schemas/',
   'src/',
   'README.md',
   'CONTRACT.md',
@@ -35,6 +36,7 @@ const EXPECTED_PACKAGE_FILES = [
   'index.js',
   'openclaw.plugin.json',
   'package.json',
+  'schemas/judge-verdict.schema.json',
   'src/action.js',
   'src/audit.js',
   'src/config.js',
@@ -43,6 +45,7 @@ const EXPECTED_PACKAGE_FILES = [
   'src/decision.js',
   'src/environment.js',
   'src/judge-client.js',
+  'src/judge-schema.js',
   'src/plugin.js',
   'src/prompt.js',
   'src/redact.js',
@@ -83,10 +86,10 @@ async function tarEntries(tarballPath) {
   return stdout.trim().split('\n').filter(Boolean);
 }
 
-test('package metadata pins the internal 0.3.0 release contract', async () => {
+test('package metadata pins the internal 0.4.0 release contract and lean runtime dependencies', async () => {
   const metadata = JSON.parse(await fs.readFile(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'));
 
-  assert.equal(metadata.version, '0.3.0');
+  assert.equal(metadata.version, '0.4.0');
   assert.equal(metadata.private, true);
   assert.equal(metadata.license, 'UNLICENSED');
   assert.deepEqual(metadata.repository, {
@@ -94,7 +97,9 @@ test('package metadata pins the internal 0.3.0 release contract', async () => {
     url: 'git+https://git.sbercloud.tech/ai_transformation/poc-and-eda/llm-approve-openclaw-plugin.git',
   });
   assert.deepEqual(metadata.engines, { node: '>=22.19.0' });
+  assert.deepEqual(metadata.dependencies, { ajv: '8.20.0' });
   assert.deepEqual(metadata.peerDependencies, { openclaw: '>=2026.6.11' });
+  assert.deepEqual(metadata.peerDependenciesMeta, { openclaw: { optional: true } });
   assert.deepEqual(metadata.files, EXPECTED_FILES_FIELD);
   assert.equal(metadata.scripts.test, 'node --test');
   assert.equal(metadata.scripts['eval:smoke'], 'node evals/dev-smoke.mjs');
@@ -105,7 +110,7 @@ test('package metadata pins the internal 0.3.0 release contract', async () => {
 test('npm pack dry-run has the exact reviewed release file set', async () => {
   const packed = await npmPackDryRun();
 
-  assert.equal(packed.filename, 'openclaw-llm-action-judge-0.3.0.tgz');
+  assert.equal(packed.filename, 'openclaw-llm-action-judge-0.4.0.tgz');
   assert.deepEqual(packed.files.map((entry) => entry.path).sort(), EXPECTED_PACKAGE_FILES);
   assert.equal(packed.files.some((entry) => /(?:^|\/)(?:evals?|tests?|reviews?)(?:\/|$)/u.test(entry.path)), false);
   assert.equal(packed.files.some((entry) => path.isAbsolute(entry.path) || entry.path.split('/').includes('..')), false);
@@ -117,7 +122,7 @@ test('release builder publishes one versioned tarball and matching sha256 into a
   const outputDir = path.join(temporary, 'release');
 
   const result = await buildRelease({ packageRoot: PACKAGE_ROOT, outputDir });
-  const tarballName = 'openclaw-llm-action-judge-0.3.0.tgz';
+  const tarballName = 'openclaw-llm-action-judge-0.4.0.tgz';
   const checksumName = `${tarballName}.sha256`;
   const tarballPath = path.join(outputDir, tarballName);
   const checksumPath = path.join(outputDir, checksumName);
@@ -148,6 +153,20 @@ test('release builder publishes one versioned tarball and matching sha256 into a
     await fs.readFile(path.join(extracted, 'package', 'package.json'), 'utf8'),
   );
   assert.equal(Object.hasOwn(runtimeMetadata, 'scripts'), false);
+  assert.equal(runtimeMetadata.version, '0.4.0');
+  assert.deepEqual(runtimeMetadata.dependencies, { ajv: '8.20.0' });
+  assert.deepEqual(runtimeMetadata.peerDependenciesMeta, { openclaw: { optional: true } });
+  const [sourceSchema, packagedSchema] = await Promise.all([
+    fs.readFile(path.join(PACKAGE_ROOT, 'schemas', 'judge-verdict.schema.json'), 'utf8'),
+    fs.readFile(
+      path.join(extracted, 'package', 'schemas', 'judge-verdict.schema.json'),
+      'utf8',
+    ),
+  ]);
+  assert.equal(packagedSchema, sourceSchema);
+  const parsedSchema = JSON.parse(packagedSchema);
+  assert.equal(parsedSchema.properties.policy_version.const, '2026-07-14.1');
+  assert.equal(parsedSchema.additionalProperties, false);
   for (const file of EXPECTED_PACKAGE_FILES) {
     const content = await fs.readFile(path.join(extracted, 'package', file), 'utf8');
     for (const pattern of FORBIDDEN_CONTENT) {
@@ -178,7 +197,61 @@ test('manifest keeps model and policy immutable outside public config', async ()
   );
   assert.deepEqual(Object.keys(manifest.configSchema.properties).sort(), ['enforcement', 'mode']);
   assert.equal(JSON.stringify(manifest).includes('Qwen/Qwen3.5-397B-A17B'), false);
-  assert.equal(JSON.stringify(manifest).includes('2026-07-12.4'), false);
+  assert.equal(JSON.stringify(manifest).includes('2026-07-14.1'), false);
+});
+
+test('runtime smoke pins v0.4 and fails closed for schema-invalid judge output', async (t) => {
+  const stateDir = await tempDirectory(t);
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    ['scripts/package-runtime-smoke.mjs', PACKAGE_ROOT, stateDir],
+    { cwd: PACKAGE_ROOT, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+  );
+
+  assert.deepEqual(JSON.parse(stdout), {
+    schemaVersion: 2,
+    packageVersion: '0.4.0',
+    hooks: ['before_model_resolve', 'before_tool_call'],
+    safeAllow: true,
+    deterministicGuardBlock: true,
+    supervisedFailureApproval: true,
+    invalidSchemaFailureApproval: true,
+    invalidEnvironmentApproval: true,
+    invalidEnvironmentClientCalls: 0,
+    auditEvents: 4,
+    auditMode: '0600',
+    auditSecretFree: true,
+  });
+});
+
+test('release docs state the v0.4 structured-output contract and historical evidence boundary', async () => {
+  const [readme, contract, security, deployment, rnd, changelog] = await Promise.all([
+    fs.readFile(path.join(PACKAGE_ROOT, 'README.md'), 'utf8'),
+    fs.readFile(path.join(PACKAGE_ROOT, 'CONTRACT.md'), 'utf8'),
+    fs.readFile(path.join(PACKAGE_ROOT, 'SECURITY.md'), 'utf8'),
+    fs.readFile(path.join(PACKAGE_ROOT, 'DEPLOYMENT.md'), 'utf8'),
+    fs.readFile(path.join(PACKAGE_ROOT, 'RND.md'), 'utf8'),
+    fs.readFile(path.join(PACKAGE_ROOT, 'CHANGELOG.md'), 'utf8'),
+  ]);
+
+  for (const document of [readme, contract, security, deployment, rnd, changelog]) {
+    assert.match(document, /0\.4\.0/u);
+  }
+  for (const document of [readme, contract, security, rnd, changelog]) {
+    assert.match(document, /2026-07-14\.1/u);
+  }
+  for (const document of [readme, contract, security]) {
+    assert.match(document, /json_schema/u);
+    assert.match(document, /Ajv/u);
+  }
+  assert.match(readme, /schema-valid[^\n]*не означает safe/iu);
+  assert.match(contract, /schemas\/judge-verdict\.schema\.json/u);
+  assert.match(security, /fallback[^\n]*json_object[^\n]*отсутств/iu);
+  assert.match(deployment, /releases\/v0\.4\.0/u);
+  assert.match(deployment, /0\.4\.0[^\n]*0\.3\.0/u);
+  assert.match(rnd, /pending fresh qualification/iu);
+  assert.match(rnd, /historical baseline 0\.2\.0\/0\.3\.0/iu);
+  assert.match(changelog, /## 0\.4\.0 — 2026-07-14/u);
 });
 
 test('deployment docs distinguish managed service ENV and safe legacy rollback', async () => {

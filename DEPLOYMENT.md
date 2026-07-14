@@ -6,6 +6,8 @@
 - Node.js `>=22.19.0`;
 - доступ к `https://foundation-models.api.cloud.ru/v1`;
 - API key с доступом к `Qwen/Qwen3.5-397B-A17B`;
+- npm registry или internal mirror для установки pinned runtime dependency
+  `ajv@8.20.0` из package metadata;
 - `foundation-models.api.cloud.ru` в `no_proxy` и `NO_PROXY`, если host работает
   через корпоративный proxy.
 
@@ -14,10 +16,10 @@
 
 ## 1. Verify artifact
 
-Из каталога `releases/v0.3.0`:
+Из каталога `releases/v0.4.0`:
 
 ```bash
-shasum -a 256 -c openclaw-llm-action-judge-0.3.0.tgz.sha256
+shasum -a 256 -c openclaw-llm-action-judge-0.4.0.tgz.sha256
 ```
 
 Ожидается `OK`. Не устанавливайте artifact с несовпавшим checksum.
@@ -62,7 +64,7 @@ configuration.
 шагу 2.
 
 ```bash
-openclaw plugins install ./openclaw-llm-action-judge-0.3.0.tgz
+openclaw plugins install ./openclaw-llm-action-judge-0.4.0.tgz
 openclaw config set plugins.entries.llm-action-judge.hooks.allowConversationAccess true --strict-json
 openclaw plugins registry --refresh
 openclaw config validate
@@ -86,7 +88,7 @@ openclaw plugins doctor
 Runtime inspect обязан показать:
 
 - `imported=true`;
-- version `0.3.0`;
+- version `0.4.0`;
 - ровно `before_model_resolve` и `before_tool_call`;
 - `diagnostics=[]`.
 
@@ -107,8 +109,8 @@ failure metrics несопоставимыми с deployment.
 ## Update
 
 ```bash
-shasum -a 256 -c openclaw-llm-action-judge-0.3.0.tgz.sha256
-openclaw plugins install ./openclaw-llm-action-judge-0.3.0.tgz --force
+shasum -a 256 -c openclaw-llm-action-judge-0.4.0.tgz.sha256
+openclaw plugins install ./openclaw-llm-action-judge-0.4.0.tgz --force
 openclaw plugins registry --refresh
 openclaw config validate
 openclaw gateway restart
@@ -120,14 +122,34 @@ openclaw plugins inspect llm-action-judge --runtime --json
 посмотрите точный список и удалите только старый judge path. Не удаляйте пути
 других plugins.
 
-## Rollback
+## Rollback 0.4.0 → 0.3.0
 
-Пока работает 0.3.0, сначала задайте `OPENCLAW_JUDGE_PROFILE=shadow` в durable
+Пока работает 0.4.0, сначала задайте `OPENCLAW_JUDGE_PROFILE=shadow` в durable
 environment service manager/platform, выполните rollout/restart и проверьте
 health. Shell-local значение для managed service недостаточно.
 
-До установки 0.2.0 явно зафиксируйте его legacy observe-only config, потому что
-эта версия игнорирует `OPENCLAW_JUDGE_*`:
+Затем установите предыдущий проверенный artifact 0.3.0. Он использует тот же
+public ENV/profile и hook contract, но policy `2026-07-12.4` и старый
+`json_object` transport:
+
+```bash
+shasum -a 256 -c openclaw-llm-action-judge-0.3.0.tgz.sha256
+openclaw plugins install ./openclaw-llm-action-judge-0.3.0.tgz --force
+openclaw plugins registry --refresh
+openclaw config validate
+openclaw gateway restart
+openclaw gateway health
+openclaw plugins inspect llm-action-judge --runtime --json
+```
+
+Проверьте runtime version `0.3.0`, два hook и `diagnostics=[]`. Rollback не
+отзывает API key — при incident с credential выполните отдельную
+rotation/revocation.
+
+### Further rollback 0.3.0 → 0.2.0
+
+Перед установкой 0.2.0 явно зафиксируйте его legacy observe-only config, потому
+что эта версия игнорирует `OPENCLAW_JUDGE_*`:
 
 ```bash
 openclaw config set plugins.entries.llm-action-judge.config '{"mode":"supervised","enforcement":"shadow"}' --strict-json
@@ -135,23 +157,8 @@ openclaw config get plugins.entries.llm-action-judge.config --json
 openclaw config validate
 ```
 
-Только затем установите предыдущий проверенный versioned artifact:
-
-```bash
-shasum -a 256 -c openclaw-llm-action-judge-0.2.0.tgz.sha256
-openclaw plugins install ./openclaw-llm-action-judge-0.2.0.tgz --force
-openclaw plugins registry --refresh
-openclaw config validate
-openclaw gateway restart
-openclaw gateway health
-openclaw plugins inspect llm-action-judge --runtime --json
-openclaw config get plugins.entries.llm-action-judge.config --json
-```
-
-Проверьте одновременно runtime version `0.2.0` и exact legacy config
-`supervised + shadow`. Версии 0.2.0 также нужен shared
-`models.providers.cloudru` config. Rollback не отзывает API key — при incident
-с credential выполните отдельную rotation/revocation.
+Только затем устанавливайте проверенный artifact 0.2.0. Ему также нужен shared
+`models.providers.cloudru` config.
 
 ## Uninstall
 

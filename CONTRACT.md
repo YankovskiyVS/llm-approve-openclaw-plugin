@@ -1,6 +1,6 @@
 # Integration contract
 
-Этот документ — black-box контракт `openclaw-llm-action-judge` 0.3.0 для
+Этот документ — black-box контракт `openclaw-llm-action-judge` 0.4.0 для
 команды, которая встраивает плагин в OpenClaw.
 
 ## Что делает пакет
@@ -65,13 +65,31 @@ IDs или hidden reasoning.
 Deployment не может менять:
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-12.4`;
+- policy: `2026-07-14.1`;
 - minimum confidence: `0.8`;
 - system prompt и strict seven-field response schema;
 - exact-action binding, redaction, opaque downgrade и deterministic local guard;
 - approval timeout `60000 ms` с `timeoutBehavior=deny`.
 
 Такие изменения требуют новой версии source, policy version и qualification.
+
+## Judge response contract
+
+Canonical portable contract находится в
+`schemas/judge-verdict.schema.json` внутри `.tgz`. Cloud.ru получает его через
+`response_format.type=json_schema` с `strict=true`; fallback на `json_object`
+отсутствует. Полученный объект повторно проверяется локально Ajv без coercion,
+defaults, удаления полей или передачи model-controlled validation errors наружу.
+
+Schema-valid объект сам по себе не разрешает действие. После schema validation
+обязательны exact action hash, rationale semantics, risk, authorization,
+confidence, opaque-data checks и deterministic local guard. Ошибка provider
+Structured Output или local validation использует существующий fail-closed
+mapping из таблицы ниже.
+
+JSON Schema является integration artifact для других языков. Platform-команда
+может сгенерировать из неё Pydantic model, но Python/Pydantic runtime и sidecar
+не являются частью плагина или его deployment contract.
 
 ## Выход hook
 

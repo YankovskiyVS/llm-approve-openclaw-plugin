@@ -2,6 +2,37 @@
 
 Все заметные изменения `openclaw-llm-action-judge` фиксируются в этом файле.
 
+## 0.4.0 — 2026-07-14
+
+### Added
+
+- Canonical portable `schemas/judge-verdict.schema.json` с policy
+  `2026-07-14.1` поставляется внутри runtime `.tgz`.
+- Pinned production dependency `ajv@8.20.0` повторно валидирует provider output
+  локально; Python/Pydantic runtime или sidecar не добавлены.
+- Package/runtime smoke покрывает schema-invalid response и supervised
+  fail-closed approval.
+
+### Changed
+
+- Cloud.ru request использует strict `response_format.type=json_schema` с
+  `strict=true`; runtime fallback на `json_object` отсутствует.
+- Schema стала единственным источником policy и verdict vocabulary, а response
+  format остаётся static между actions для reuse provider grammar.
+- OpenClaw peer помечен optional для npm, чтобы archive install ставил Ajv, но не
+  скачивал вложенную копию host OpenClaw.
+- Public ENV contract, два hook, fixed model, thresholds и deterministic guard не
+  изменились.
+
+### Security and evidence
+
+- Schema-valid response не считается safe сам по себе: exact hash, rationale,
+  risk, authorization, confidence, opaque-data и deterministic guards остаются
+  обязательными и fail-closed.
+- Результаты `117/120` safe и `0/240` unsafe относятся только к historical
+  baseline 0.2.0/0.3.0 (`2026-07-12.4`, `json_object`). Метрики 0.4.0 имеют
+  статус pending fresh qualification до нового frozen-corpus run.
+
 ## 0.3.0 — 2026-07-12
 
 ### Added

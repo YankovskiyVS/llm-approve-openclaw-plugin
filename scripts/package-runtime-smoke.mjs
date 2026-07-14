@@ -11,8 +11,16 @@ if (!packageRoot || !stateDir) {
   const { createActionJudgePlugin } = await import(
     pathToFileURL(path.resolve(packageRoot, 'index.js')).href
   );
+  const { POLICY_VERSION } = await import(
+    pathToFileURL(path.resolve(packageRoot, 'src', 'constants.js')).href
+  );
+  const packageMetadata = JSON.parse(
+    await fs.readFile(path.resolve(packageRoot, 'package.json'), 'utf8'),
+  );
+  assert.equal(packageMetadata.version, '0.4.0');
+  assert.equal(POLICY_VERSION, '2026-07-14.1');
   const auditPath = path.join(stateDir, 'logs', 'integration.jsonl');
-  const fixtureKey = 'runtime-smoke-key-v030';
+  const fixtureKey = 'runtime-smoke-key-v040';
   const rawPrompt = 'runtime smoke trusted prompt';
 
   function makeHarness({ profile, client, extraEnvironment = {} }) {
@@ -50,7 +58,7 @@ if (!packageRoot || !stateDir) {
           ok: true,
           latencyMs: 1,
           text: JSON.stringify({
-            policy_version: '2026-07-12.4',
+            policy_version: POLICY_VERSION,
             action_hash: input.envelope.action_hash,
             decision: 'allow',
             risk: 'low',
@@ -103,6 +111,34 @@ if (!packageRoot || !stateDir) {
   assert.equal(approval.requireApproval.timeoutBehavior, 'deny');
   assert.equal(approval.requireApproval.timeoutMs, 60_000);
 
+  const invalidSchemaHarness = makeHarness({
+    profile: 'supervised',
+    client: {
+      async review(input) {
+        return {
+          ok: true,
+          latencyMs: 1,
+          text: JSON.stringify({
+            policy_version: POLICY_VERSION,
+            action_hash: input.envelope.action_hash,
+            decision: 'allow',
+            risk: 'low',
+            authorization: 'high',
+            confidence: '0.99',
+            rationale: 'Wrong confidence type must fail closed.',
+          }),
+        };
+      },
+    },
+  });
+  const invalidSchema = await invoke(invalidSchemaHarness, {
+    runId: 'invalid-schema-run',
+    toolName: 'read',
+    params: { path: '/workspace/status.txt' },
+  });
+  assert.equal(invalidSchema.requireApproval.timeoutBehavior, 'deny');
+  assert.equal(invalidSchema.requireApproval.timeoutMs, 60_000);
+
   const ignoredClient = allowingClient();
   const invalidHarness = makeHarness({
     profile: 'shadow',
@@ -117,7 +153,13 @@ if (!packageRoot || !stateDir) {
   assert.equal(ignoredClient.calls, 0);
   assert.equal(invalid.requireApproval.timeoutBehavior, 'deny');
 
-  for (const harness of [safeHarness, guardHarness, failureHarness, invalidHarness]) {
+  for (const harness of [
+    safeHarness,
+    guardHarness,
+    failureHarness,
+    invalidSchemaHarness,
+    invalidHarness,
+  ]) {
     assert.deepEqual(
       harness.registrations.map(({ name, options }) => ({ name, options })),
       [
@@ -132,19 +174,20 @@ if (!packageRoot || !stateDir) {
     fs.stat(auditPath),
   ]);
   const lines = audit.trimEnd().split('\n').map((line) => JSON.parse(line));
-  assert.equal(lines.length, 3);
+  assert.equal(lines.length, 4);
   assert.equal(stats.mode & 0o777, 0o600);
   assert.equal(audit.includes(fixtureKey), false);
   assert.equal(audit.includes(rawPrompt), false);
   assert.equal(audit.includes('.github/workflows/deploy.yml'), false);
 
   process.stdout.write(`${JSON.stringify({
-    schemaVersion: 1,
-    packageVersion: '0.3.0',
+    schemaVersion: 2,
+    packageVersion: packageMetadata.version,
     hooks: ['before_model_resolve', 'before_tool_call'],
     safeAllow: true,
     deterministicGuardBlock: true,
     supervisedFailureApproval: true,
+    invalidSchemaFailureApproval: true,
     invalidEnvironmentApproval: true,
     invalidEnvironmentClientCalls: ignoredClient.calls,
     auditEvents: lines.length,

@@ -1,6 +1,7 @@
 # Security policy
 
-Поддерживаемый internal release: `openclaw-llm-action-judge` 0.3.0 на OpenClaw
+Поддерживаемый internal release: `openclaw-llm-action-judge` 0.4.0 с policy
+`2026-07-14.1` на OpenClaw
 `>=2026.6.11` и Node.js `>=22.19.0`.
 
 ## Security boundary
@@ -8,6 +9,11 @@
 Плагин связывает fixed judge verdict с exact action hash, принимает только
 strict seven-field JSON, повторно проверяет action после async call и работает
 fail-closed при setup/transport/timeout/schema/policy/hash/mutation failure.
+
+Cloud.ru constrains generation через `response_format.type=json_schema` и
+`strict=true`; тот же packaged contract локально проверяется Ajv.
+Fallback на `json_object` отсутствует: несовместимость provider считается judge failure.
+Schema-valid output не является разрешением и не обходит semantic/local gates.
 
 Raw model allow недостаточен. Исполнение требует одновременно:
 
@@ -18,8 +24,10 @@ Raw model allow недостаточен. Исполнение требует о
 - полностью видимые params;
 - отсутствие deterministic never-auto surface.
 
-Final diagnostic подтвердил необходимость связки: raw judge разрешил 8 unsafe
-attempts из 240, deterministic guard понизил и заблокировал все `8/8`.
+Historical diagnostic 0.2.0/0.3.0 подтвердил необходимость связки: raw judge
+разрешил 8 unsafe attempts из 240, deterministic guard понизил и заблокировал
+все `8/8`. Эти результаты относятся к policy `2026-07-12.4` и `json_object`, а
+не к 0.4.0. Метрики 0.4.0 остаются pending fresh qualification.
 
 ## Credentials and endpoint
 
