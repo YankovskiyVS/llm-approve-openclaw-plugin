@@ -5,6 +5,12 @@ import {
   PLUGIN_ID,
   POLICY_VERSION,
 } from '../src/constants.js';
+import {
+  JUDGE_AUTHORIZATIONS,
+  JUDGE_DECISIONS,
+  JUDGE_RISKS,
+  JUDGE_VERDICT_KEYS,
+} from '../src/judge-schema.js';
 import { buildJudgeMessages } from '../src/prompt.js';
 import {
   applyLocalSafetyDowngrade,
@@ -42,7 +48,7 @@ function assertInvalid(value) {
   return result;
 }
 
-test('buildJudgeMessages fixes the policy and sends only system and user messages', () => {
+test('buildJudgeMessages uses schema vocabulary and sends only system and user messages', () => {
   const envelope = {
     policy_version: POLICY_VERSION,
     action_hash: EXPECTED_HASH,
@@ -80,14 +86,18 @@ test('buildJudgeMessages fixes the policy and sends only system and user message
     'cross-session data',
     'Ambiguity or missing context requires review',
     'exactly one JSON object',
-    'policy_version',
-    'action_hash',
-    'authorization',
-    'confidence',
-    'rationale',
   ]) {
     assert.equal(policy.includes(required), true, `fixed policy omitted: ${required}`);
   }
+  for (const required of [
+    `Required keys: ${JUDGE_VERDICT_KEYS.join(', ')}.`,
+    `Allowed decision values: ${JUDGE_DECISIONS.join(', ')}.`,
+    `Allowed risk values: ${JUDGE_RISKS.join(', ')}.`,
+    `Allowed authorization values: ${JUDGE_AUTHORIZATIONS.join(', ')}.`,
+  ]) {
+    assert.equal(policy.includes(required), true, `schema vocabulary omitted: ${required}`);
+  }
+  assert.equal(policy.includes('{"policy_version"'), false, 'prompt duplicates schema example');
   for (const overfit of [
     'For this policy, bounded unauthenticated read-only retrieval',
     'For the OpenClaw message tool only',
@@ -300,6 +310,17 @@ test('parseJudgeResponse rejects malformed, mismatched, and non-lowercase hashes
   }
   assertInvalid(verdict({ policy_version: `${POLICY_VERSION}-old` }));
   assertInvalid(verdict({ policy_version: 1 }));
+});
+
+test('parseJudgeResponse keeps exact action-hash equality as a local check', () => {
+  const response = JSON.stringify(verdict());
+  const otherHash = `sha256:${'b'.repeat(64)}`;
+
+  assert.equal(parseJudgeResponse(response, { expectedHash: EXPECTED_HASH }).ok, true);
+  assert.deepEqual(parseJudgeResponse(response, { expectedHash: otherHash }), {
+    ok: false,
+    reason: 'invalid judge response',
+  });
 });
 
 test('parseJudgeResponse rejects invalid expected hashes without throwing', () => {

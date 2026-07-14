@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createJudgeClient } from '../src/judge-client.js';
 import { JUDGE_TIMEOUT_MS, MODEL_ID, POLICY_VERSION } from '../src/constants.js';
+import { createJudgeResponseFormat } from '../src/judge-schema.js';
 import { buildJudgeMessages } from '../src/prompt.js';
 
 const ACTION_HASH = `sha256:${'a'.repeat(64)}`;
@@ -109,7 +110,7 @@ test('sends the exact fixed Cloud.ru request through the injected fetch', async 
     messages: buildJudgeMessages({ userPrompt: USER_PROMPT, envelope: ENVELOPE }),
     temperature: 0,
     max_tokens: 256,
-    response_format: { type: 'json_object' },
+    response_format: createJudgeResponseFormat(),
     chat_template_kwargs: { enable_thinking: false },
   });
   assert.equal(receivedOptions.body.includes(secret), false, 'request body exposed the API key');
@@ -121,6 +122,40 @@ test('sends the exact fixed Cloud.ru request through the injected fetch', async 
   });
   assert.equal(JSON.stringify(result).includes(secret), false, 'result exposed the API key');
   assertLatency(result.latencyMs);
+});
+
+test('keeps the response schema static while prompts bind each action hash', async () => {
+  const otherHash = `sha256:${'b'.repeat(64)}`;
+  const envelopes = [
+    ENVELOPE,
+    {
+      ...ENVELOPE,
+      action_hash: otherHash,
+      params: { path: '/tmp/other-status' },
+    },
+  ];
+  const bodies = [];
+  const client = makeClient(async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return successfulResponse();
+  });
+
+  for (const envelope of envelopes) {
+    const result = await client.review({ userPrompt: USER_PROMPT, envelope });
+    assert.equal(result.ok, true);
+  }
+
+  assert.equal(bodies.length, envelopes.length);
+  for (const [index, body] of bodies.entries()) {
+    assert.deepEqual(body.response_format, createJudgeResponseFormat());
+    assert.equal(body.response_format.type, 'json_schema');
+    assert.equal(body.response_format.json_schema.strict, true);
+    assert.equal(body.messages[1].content.includes(envelopes[index].action_hash), true);
+  }
+  assert.deepEqual(bodies[0].response_format, bodies[1].response_format);
+  const serializedFormat = JSON.stringify(bodies[0].response_format);
+  assert.equal(serializedFormat.includes(ACTION_HASH), false);
+  assert.equal(serializedFormat.includes(otherHash), false);
 });
 
 test('returns a strict sanitized usage snapshot from own integer fields', async () => {

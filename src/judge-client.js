@@ -1,5 +1,6 @@
 import { types } from 'node:util';
 import { JUDGE_TIMEOUT_MS, MODEL_ID } from './constants.js';
+import { createJudgeResponseFormat } from './judge-schema.js';
 import { buildJudgeMessages } from './prompt.js';
 import { canonicalStringify } from './action.js';
 
@@ -243,7 +244,7 @@ export function createJudgeClient(options = {}) {
           messages,
           temperature: 0,
           max_tokens: 256,
-          response_format: { type: 'json_object' },
+          response_format: createJudgeResponseFormat(),
           chat_template_kwargs: { enable_thinking: false },
         });
         if (body.includes(apiKey)) return failure(INVALID_REQUEST, startedAt);
