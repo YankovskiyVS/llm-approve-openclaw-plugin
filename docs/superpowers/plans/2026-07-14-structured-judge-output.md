@@ -4,13 +4,13 @@
 
 **Goal:** Enforce the fixed seven-field judge verdict through one packaged JSON Schema at the Cloud.ru API boundary and again inside the Node.js plugin.
 
-**Architecture:** A canonical JSON Schema becomes the source of contract vocabulary and policy version. Ajv validates parsed snapshots locally, while a schema builder injects the exact action hash into Cloud.ru `json_schema` Structured Output. Raw duplicate detection and semantic safety gates remain separate and fail closed.
+**Architecture:** A canonical static JSON Schema becomes the source of contract vocabulary and policy version. Ajv validates parsed snapshots locally, while the same static schema is sent through Cloud.ru `json_schema` Structured Output so provider grammar compilation can be reused. Raw duplicate detection, exact action-hash equality, and semantic safety gates remain separate and fail closed.
 
 **Tech Stack:** Node.js 22.19+, ECMAScript modules, JSON Schema draft-07, Ajv 8, Node test runner, OpenClaw plugin hooks, Cloud.ru OpenAI-compatible Chat Completions API.
 
 ## Global Constraints
 
-- Keep model `Qwen/Qwen3.5-397B-A17B` and policy `2026-07-12.4` fixed.
+- Keep model `Qwen/Qwen3.5-397B-A17B` fixed and ship policy `2026-07-14.1`.
 - Never fall back from strict `json_schema` to `json_object` at runtime.
 - Never add a Python runtime or sidecar to the plugin.
 - Never let schema validity bypass exact-hash, risk, authorization, confidence, opaque-data, or deterministic local guard checks.
@@ -30,12 +30,12 @@
 
 **Interfaces:**
 - Produces: `JUDGE_VERDICT_SCHEMA`, `JUDGE_VERDICT_KEYS`, enum arrays,
-  `validateJudgeVerdict(value)`, and `createJudgeResponseFormat(expectedHash)`.
+  `validateJudgeVerdict(value)`, and `createJudgeResponseFormat()`.
 - Consumes: the canonical schema only; no plugin runtime state.
 
 - [ ] Write tests proving exact schema acceptance/rejection, non-coercion,
-  immutability, generic errors, exact response-format shape, and per-action hash
-  specialization.
+  immutability, generic errors, exact response-format shape, and defensive
+  static-schema copies.
 - [ ] Run `node --test test/judge-schema.test.js` and confirm RED because the
   module and schema do not exist.
 - [ ] Add the draft-07 schema, exact Ajv dependency, schema module, and derive
@@ -51,13 +51,12 @@
 - Modify: `test/decision.test.js`
 
 **Interfaces:**
-- Consumes: `createJudgeResponseFormat(expectedHash)` and schema-derived key
-  vocabulary.
-- Produces: an exact Cloud.ru request using `type=json_schema` and
-  `strict=true` without fallback.
+- Consumes: `createJudgeResponseFormat()` and schema-derived key vocabulary.
+- Produces: an exact Cloud.ru request using the static schema with
+  `type=json_schema` and `strict=true` without fallback.
 
-- [ ] Change tests to require strict `json_schema`, exact per-action hash
-  binding, and schema-derived prompt vocabulary.
+- [ ] Change tests to require strict `json_schema`, a static schema, local exact
+  action-hash binding, and schema-derived prompt vocabulary.
 - [ ] Run the focused tests and confirm RED against the current `json_object`
   request.
 - [ ] Build the strict response format from the envelope action hash and remove
@@ -104,7 +103,7 @@
   and explicit Structured Output/fail-closed documentation.
 
 - [ ] Update release tests first to require version `0.4.0`, packaged schema,
-  Ajv dependency metadata, and current immutable policy.
+  Ajv dependency metadata, and policy `2026-07-14.1`.
 - [ ] Run release tests and confirm RED against `0.3.0` packaging.
 - [ ] Update package metadata and documentation without changing public ENV or
   hook contracts.
@@ -124,6 +123,8 @@
 - [ ] Run `npm test`; require zero failures.
 - [ ] Run a live Cloud.ru seven-field strict-schema request with the fixed model;
   require HTTP 200, `finish_reason=stop`, schema validity, and exact action hash.
+- [ ] Re-run the frozen fixed-model qualification corpus under policy
+  `2026-07-14.1`; do not reuse old safety metrics for the release claim.
 - [ ] Run source and packaged runtime smoke in an isolated OpenClaw state;
   require two hooks, no diagnostics, safe allow, deterministic guard block,
   invalid-response fail-closed, and secret-free audit mode `0600`.

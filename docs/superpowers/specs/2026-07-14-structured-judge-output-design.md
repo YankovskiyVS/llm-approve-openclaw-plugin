@@ -23,8 +23,8 @@ also marks this model as supporting Structure Output.
 
 ## Boundaries
 
-- Keep the fixed model, policy `2026-07-12.4`, profiles, hooks, action hash,
-  local safety guard, and fail-closed mappings unchanged.
+- Keep the fixed model, profiles, hooks, action hash, local safety guard, and
+  fail-closed mappings unchanged.
 - Do not add Python or a Pydantic runtime to the Node.js plugin.
 - Do not fall back silently to `json_object`; transport incompatibility is a
   judge failure and follows the existing supervised/autonomous fail-closed
@@ -40,7 +40,7 @@ also marks this model as supporting Structure Output.
 Add `schemas/judge-verdict.schema.json` as the language-neutral source of truth.
 It defines exactly these required fields and rejects additional properties:
 
-- `policy_version`: string constant `2026-07-12.4`;
+- `policy_version`: string constant `2026-07-14.1`;
 - `action_hash`: lowercase `sha256:` hash pattern;
 - `decision`: `allow | deny | review`;
 - `risk`: `low | medium | high | critical`;
@@ -60,8 +60,8 @@ Add `src/judge-schema.js` to:
 - expose the required key and enum vocabulary derived from the schema;
 - validate parsed verdict objects without returning model-controlled error
   text;
-- construct a fresh provider response format that specializes
-  `action_hash.const` to the exact proposed action.
+- construct a defensive provider response format from the static canonical
+  schema.
 
 `POLICY_VERSION` is read from the canonical schema so the schema, prompt,
 parser, and provider request cannot carry independent policy literals.
@@ -71,7 +71,8 @@ parser, and provider request cannot carry independent policy literals.
 1. `judge-client` builds the existing trusted-intent and untrusted-action
    messages.
 2. It sends `response_format={type:"json_schema", json_schema:{name,
-   strict:true,schema}}` with a per-action hash constant.
+   strict:true,schema}}` using the static schema so the provider can reuse its
+   compiled grammar across requests.
 3. `parseJudgeResponse` keeps the raw duplicate-key detector, parses one bare
    object, validates it with Ajv, and applies exact hash plus rationale checks.
 4. `plugin` creates a descriptor-safe plain snapshot, validates the snapshot
@@ -91,7 +92,7 @@ plugin runtime.
 
 - Schema accepts exactly one valid verdict and rejects missing, extra, wrong
   type, enum, range, policy, and hash-shape cases.
-- Provider response format is `json_schema`, strict, per-action bound, and
+- Provider response format is `json_schema`, strict, static across actions, and
   defensively copied.
 - Judge client sends the exact strict response format.
 - Existing duplicate-key, exact-hash, hostile parser, semantic downgrade, and
@@ -102,8 +103,9 @@ plugin runtime.
 
 ## Release
 
-Ship as plugin `0.4.0`. The policy version stays `2026-07-12.4` because the
-decision policy and seven-field semantics are unchanged; this release makes
-the already-qualified contract provider-enforced and single-source. Update the
-contract, security, deployment, R&D, changelog, release artifact, checksums,
-isolated OpenClaw runtime smoke, tag, and GitLab branch.
+Ship as plugin `0.4.0` with policy `2026-07-14.1`. Although the decision rules
+and seven fields remain the same, provider-constrained generation can change
+model behavior, so old metrics must not be attributed to this release without
+a fresh fixed-model qualification run. Update the contract, security,
+deployment, R&D, changelog, release artifact, checksums, isolated OpenClaw
+runtime smoke, tag, and GitLab branch.
