@@ -18,7 +18,8 @@ const MANIFEST_KEYS = Object.freeze([
   'source_sha256', 'endpoint_origin', 'profile',
 ]);
 const SOURCE_KEYS = Object.freeze([
-  'action', 'prompt', 'decision', 'redaction', 'constants', 'judge_client', 'harness',
+  'action', 'prompt', 'decision', 'redaction', 'constants', 'judge_client',
+  'judge_schema', 'verdict_schema', 'harness',
 ]);
 const PROFILE_KEYS = Object.freeze([
   'name', 'temperature', 'max_tokens', 'thinking',
@@ -31,7 +32,7 @@ const PRODUCTION_PROFILE = Object.freeze({
   temperature: 0,
   max_tokens: 256,
   thinking: false,
-  response_format: 'json_object',
+  response_format: 'json_schema',
   timeout_ms: JUDGE_TIMEOUT_MS,
 });
 
@@ -164,6 +165,8 @@ function validateExactManifest(input) {
     source.redaction,
     source.constants,
     source.judge_client,
+    source.judge_schema,
+    source.verdict_schema,
     source.harness,
   ]) {
     if (typeof hash !== 'string' || !HASH_PATTERN.test(hash)) {

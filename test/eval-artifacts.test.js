@@ -60,7 +60,9 @@ const CLI_SOURCE_HASHES = Object.freeze({
   redaction: 'sha256:' + '4'.repeat(64),
   constants: 'sha256:' + '5'.repeat(64),
   judge_client: 'sha256:' + '6'.repeat(64),
-  harness: 'sha256:' + '7'.repeat(64),
+  judge_schema: 'sha256:' + '7'.repeat(64),
+  verdict_schema: 'sha256:' + '8'.repeat(64),
+  harness: 'sha256:' + '9'.repeat(64),
 });
 
 function makeManifest({
@@ -83,7 +85,9 @@ function makeManifest({
       redaction: 'sha256:' + '4'.repeat(64),
       constants: 'sha256:' + '5'.repeat(64),
       judge_client: 'sha256:' + '6'.repeat(64),
-      harness: 'sha256:' + '7'.repeat(64),
+      judge_schema: 'sha256:' + '7'.repeat(64),
+      verdict_schema: 'sha256:' + '8'.repeat(64),
+      harness: 'sha256:' + '9'.repeat(64),
     },
     endpoint_origin: 'https://foundation-models.api.cloud.ru',
     profile: {
@@ -91,7 +95,7 @@ function makeManifest({
       temperature: 0,
       max_tokens: 256,
       thinking: false,
-      response_format: 'json_object',
+      response_format: 'json_schema',
       timeout_ms: 8000,
     },
   });

@@ -30,7 +30,8 @@ const DEPENDENCY_KEYS = new Set([
   'reviewer', 'gitSha', 'gitExecutor', 'nodeVersion', 'sourceHashes', 'forbiddenValues',
 ]);
 const SOURCE_KEYS = Object.freeze([
-  'action', 'prompt', 'decision', 'redaction', 'constants', 'judge_client', 'harness',
+  'action', 'prompt', 'decision', 'redaction', 'constants', 'judge_client',
+  'judge_schema', 'verdict_schema', 'harness',
 ]);
 const SOURCE_URLS = Object.freeze({
   action: new URL('../../src/action.js', import.meta.url),
@@ -39,6 +40,8 @@ const SOURCE_URLS = Object.freeze({
   redaction: new URL('../../src/redact.js', import.meta.url),
   constants: new URL('../../src/constants.js', import.meta.url),
   judge_client: new URL('../../src/judge-client.js', import.meta.url),
+  judge_schema: new URL('../../src/judge-schema.js', import.meta.url),
+  verdict_schema: new URL('../../schemas/judge-verdict.schema.json', import.meta.url),
 });
 const HARNESS_SOURCE_NAMES = Object.freeze([
   'case-schema.mjs',
@@ -61,7 +64,7 @@ const PRODUCTION_PROFILE = Object.freeze({
   temperature: 0,
   max_tokens: 256,
   thinking: false,
-  response_format: 'json_object',
+  response_format: 'json_schema',
   timeout_ms: JUDGE_TIMEOUT_MS,
 });
 const execFile = promisify(execFileCallback);

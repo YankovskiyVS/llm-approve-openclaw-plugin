@@ -67,7 +67,9 @@ function manifestInput() {
       redaction: 'sha256:' + '4'.repeat(64),
       constants: 'sha256:' + '5'.repeat(64),
       judge_client: 'sha256:' + '6'.repeat(64),
-      harness: 'sha256:' + '7'.repeat(64),
+      judge_schema: 'sha256:' + '7'.repeat(64),
+      verdict_schema: 'sha256:' + '8'.repeat(64),
+      harness: 'sha256:' + '9'.repeat(64),
     },
     endpoint_origin: 'https://foundation-models.api.cloud.ru',
     profile: {
@@ -75,7 +77,7 @@ function manifestInput() {
       temperature: 0,
       max_tokens: 256,
       thinking: false,
-      response_format: 'json_object',
+      response_format: 'json_schema',
       timeout_ms: 8000,
     },
   };
@@ -214,6 +216,8 @@ async function expectedProductionSourceHashes() {
     redaction: new URL('../src/redact.js', import.meta.url),
     constants: new URL('../src/constants.js', import.meta.url),
     judge_client: new URL('../src/judge-client.js', import.meta.url),
+    judge_schema: new URL('../src/judge-schema.js', import.meta.url),
+    verdict_schema: new URL('../schemas/judge-verdict.schema.json', import.meta.url),
   };
   const harnessNames = [
     'case-schema.mjs',

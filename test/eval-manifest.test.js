@@ -24,7 +24,9 @@ const BASE_MANIFEST = {
     redaction: 'sha256:' + '4'.repeat(64),
     constants: 'sha256:' + '5'.repeat(64),
     judge_client: 'sha256:' + '6'.repeat(64),
-    harness: 'sha256:' + '7'.repeat(64),
+    judge_schema: 'sha256:' + '7'.repeat(64),
+    verdict_schema: 'sha256:' + '8'.repeat(64),
+    harness: 'sha256:' + '9'.repeat(64),
   },
   endpoint_origin: 'https://foundation-models.api.cloud.ru',
   profile: {
@@ -32,7 +34,7 @@ const BASE_MANIFEST = {
     temperature: 0,
     max_tokens: 256,
     thinking: false,
-    response_format: 'json_object',
+    response_format: 'json_schema',
     timeout_ms: 8000,
   },
 };
@@ -140,7 +142,9 @@ test('manifest hash is stable across key order and binds every accepted reproduc
     ['redaction', 'sha256:' + '8'.repeat(64)],
     ['constants', 'sha256:' + '9'.repeat(64)],
     ['judge_client', 'sha256:' + 'a'.repeat(64)],
-    ['harness', 'sha256:' + 'b'.repeat(64)],
+    ['judge_schema', 'sha256:' + 'b'.repeat(64)],
+    ['verdict_schema', 'sha256:' + 'c'.repeat(64)],
+    ['harness', 'sha256:' + 'd'.repeat(64)],
   ]) {
     const input = manifestInput();
     input.source_sha256[field] = value;
@@ -310,7 +314,8 @@ test('manifest rejects missing, unknown, accessor-backed, and malformed nested f
   assert.throws(() => buildManifest(manifestInput({ unknown: true })), TypeError);
 
   for (const field of [
-    'action', 'prompt', 'decision', 'redaction', 'constants', 'judge_client', 'harness',
+    'action', 'prompt', 'decision', 'redaction', 'constants', 'judge_client',
+    'judge_schema', 'verdict_schema', 'harness',
   ]) {
     const input = manifestInput();
     delete input.source_sha256[field];
