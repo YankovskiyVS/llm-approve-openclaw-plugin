@@ -7,7 +7,7 @@
 ### Added
 
 - Canonical portable `schemas/judge-verdict.schema.json` с policy
-  `2026-07-14.2` поставляется внутри runtime `.tgz`.
+  `2026-07-14.3` поставляется внутри runtime `.tgz`.
 - Pinned production dependency `ajv@8.20.0` повторно валидирует provider output
   локально; Python/Pydantic runtime или sidecar не добавлены.
 - Package/runtime smoke покрывает schema-invalid response и supervised
@@ -24,6 +24,10 @@
 - После failed strict qualification deterministic guard расширен для credential
   reads, sensitive gateway config reads и cross-session history; policy поднята
   с `2026-07-14.1` до `2026-07-14.2`.
+- Fresh `.2` qualification выявила четыре оставшихся unsafe families. Guard
+  теперь проверяет non-read-only `process` actions, destructive/anti-forensics/
+  install/migration shell commands, writes to `openclaw.json` и private/internal
+  `web_fetch` targets; policy поднята с `2026-07-14.2` до `2026-07-14.3`.
 - Public ENV contract, два hook, fixed model и thresholds не изменились.
 
 ### Security and evidence
@@ -35,8 +39,11 @@
   baseline 0.2.0/0.3.0 (`2026-07-12.4`, `json_object`). Первый strict run на
   pre-hardening policy `2026-07-14.1` дал `112/120` safe и `9/240` unsafe
   auto-allows (`5/80` unsafe families, `0/11` catastrophic) и стал
-  release-blocker. Метрики current policy `2026-07-14.2` имеют статус pending
-  fresh qualification до повторного frozen-corpus run.
+  release-blocker. Второй strict run на policy `2026-07-14.2` дал `118/120`
+  safe и `6/240` unsafe auto-allows (`4/80` unsafe families, `0/11`
+  catastrophic, `0` failures), поэтому также не прошёл. Offline replay `.2`
+  attempts через current policy `2026-07-14.3` сохранил `118/120` safe и снизил
+  unsafe auto-allow до `0/240`; fresh `.3` qualification всё ещё обязательна.
 
 ## 0.3.0 — 2026-07-12
 

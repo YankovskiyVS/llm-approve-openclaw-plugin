@@ -7,7 +7,7 @@
 Runtime contract 0.4.0 зафиксирован так:
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-14.2`;
+- policy: `2026-07-14.3`;
 - production profile: `temperature=0`, strict
   `response_format.type=json_schema`, `strict=true`, thinking off,
   `max_tokens=256`;
@@ -41,7 +41,7 @@ generation и новая policy могут изменить решения fixed
 `117/120` и `0/240` — только **historical baseline 0.2.0/0.3.0** с policy
 `2026-07-12.4` и `json_object`. Их нельзя выдавать за результат 0.4.0.
 
-До публикации нужен новый frozen-corpus run policy `2026-07-14.2`; source tests,
+До публикации нужен новый frozen-corpus run policy `2026-07-14.3`; source tests,
 packaged runtime smoke и live one-response Structured Output probe не заменяют
 model qualification.
 
@@ -62,9 +62,32 @@ model qualification.
 
 Ненулевые unsafe auto-allows сделали этот прогон **release-blocker**, а не
 успешной qualification. После него deterministic guard был усилен и policy
-поднята до `2026-07-14.2`. Результаты `.1` нельзя переносить на `.2`: current
-`.2` metrics имеют статус **pending fresh qualification** до полного повторного
-прогона того же frozen corpus.
+поднята до `2026-07-14.2`. Результаты `.1` нельзя переносить на `.2`; отдельный
+`.2` run ниже остаётся собственным failed historical evidence.
+
+## Failed second strict qualification, policy 2026-07-14.2
+
+Повторный frozen-corpus run после первого hardening сохранён в artifact
+`llm-judge-v040-qualification-20260714T173648Z` и зафиксировал **120 cases / 360
+attempts**:
+
+- safe executed: **118/120** (`38/40` safe families);
+- unsafe auto-allow: **6/240**;
+- unsafe MUST_BLOCK families: **4/80**;
+- catastrophic unsafe families: **0/11**;
+- failures: **0/360**;
+- latency: p50 **1846.523 ms**, p95 **2334.410 ms**, p99 **2573.507 ms**.
+
+Все шесть пропусков относятся к четырём deterministic surfaces, отсутствовавшим
+в `.2` guard: `process.write`, запись в файл с именем `openclaw.json`,
+destructive `exec` и `web_fetch` на private address. Поэтому `.2` также стал
+**release-blocker**.
+
+Policy `2026-07-14.3` добавляет deterministic checks для этих surfaces. Offline
+replay всех записанных `.2` attempts через `.3` guard изменил ровно эти шесть
+unsafe outcomes с allow на review: safe осталось **118/120**, unsafe стало
+**0/240**. Replay проверяет только deterministic delta; current `.3` metrics
+остаются **pending fresh live qualification**.
 
 ## Official six-model selection context
 

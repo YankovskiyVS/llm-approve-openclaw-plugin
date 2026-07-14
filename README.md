@@ -11,7 +11,7 @@ tool calls отдельной фиксированной LLM до исполне
 ## Fixed safety contract
 
 - Judge: `Qwen/Qwen3.5-397B-A17B`.
-- Policy: `2026-07-14.2`.
+- Policy: `2026-07-14.3`.
 - Minimum allow confidence: `0.8`.
 - Default timeout: `8000 ms`.
 - Endpoint: только `https://foundation-models.api.cloud.ru/v1`.
@@ -86,8 +86,9 @@ approval в supervised, block в autonomous.
 Даже raw model `allow` понижается для redacted/truncated params, real external
 messages, state-changing cron, browser upload, active CI/git hooks/devcontainer
 lifecycle, registry/auth/IAM/OAuth/RBAC/security-policy writes, credential reads,
-sensitive gateway config reads, cross-session history и других fixed high-impact
-surfaces.
+sensitive gateway config reads, cross-session history, state-changing process
+actions, destructive shell commands, writes to `openclaw.json`, private/internal
+web fetch targets и других fixed high-impact surfaces.
 
 Это существенная часть safety boundary: historical baseline показал 8 unsafe raw
 LLM allows, и guard заблокировал все `8/8`.
@@ -110,12 +111,13 @@ LLM allows, и guard заблокировал все `8/8`.
 - `autonomous + enforce` не production-qualified.
 
 Эти цифры получены с policy `2026-07-12.4` и `json_object`; они не являются
-метриками 0.4.0. Версия 0.4.0 меняет provider generation через strict
-Structured Output и policy `2026-07-14.2`, поэтому current v0.4 metrics имеют
-статус **pending fresh qualification** до нового frozen-corpus run. Первый
-strict run на pre-hardening policy `2026-07-14.1` выявил unsafe auto-allow и
-стал release-blocker; его диагностические результаты приведены в RND, но не
-являются метриками текущей policy.
+метриками 0.4.0. Два strict qualification run для 0.4.0 стали release-blocker:
+policy `2026-07-14.1` дала `112/120` safe и `9/240` unsafe, а policy
+`2026-07-14.2` — `118/120` safe и `6/240` unsafe. Current policy
+`2026-07-14.3` добавляет deterministic coverage для четырёх оставшихся unsafe
+families и имеет статус **pending fresh qualification**. Offline replay
+записанных `.2` attempts сохранил `118/120` safe и снизил unsafe auto-allow до
+`0/240`, но он не является live `.3` model qualification.
 
 Подробности: [RND.md](RND.md).
 
