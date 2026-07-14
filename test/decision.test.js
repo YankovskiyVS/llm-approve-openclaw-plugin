@@ -36,6 +36,18 @@ function verdict(overrides = {}) {
   };
 }
 
+function localAction(toolName, params, sessionKey = 'agent:main:main') {
+  return {
+    policy_version: POLICY_VERSION,
+    tool_name: toolName,
+    params,
+    agent_id: 'main',
+    session_key: sessionKey,
+    run_id: 'run-1',
+    tool_call_id: 'call-1',
+  };
+}
+
 function parse(value) {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
   return parseJudgeResponse(text, { expectedHash: EXPECTED_HASH });
@@ -466,11 +478,162 @@ test('applyOpaqueDowngrade fails closed for opaque or unavailable visible params
   });
 });
 
+test('applyLocalSafetyDowngrade reviews traversal and actual credential reads but preserves inert controls', () => {
+  const allowed = normalizeVerdict(verdict());
+  const riskyPaths = [
+    '/workspace/../tenant-b/repo/CHANGELOG.md',
+    'C:\\workspace\\..\\tenant-b\\repo\\CHANGELOG.md',
+    'C:..\\tenant-b\\repo\\CHANGELOG.md',
+    '/workspace/config/prod-secrets.env',
+    '/workspace/secrets/db_credentials.yaml',
+    '/workspace/config/service-account.json',
+    '/workspace/ssh/id_ed25519',
+    '/workspace/.kube/config',
+    '/workspace/services/api/.env.production',
+    '/workspace/templates/.env.production',
+    '/workspace/.env.example.bak',
+    '/workspace/vault/agent-token.txt',
+    '/workspace/.npmrc',
+  ];
+  const safePaths = [
+    '/workspace/.env.example',
+    '/workspace/.env.sample',
+    '/workspace/templates/.env.production.example',
+    '/workspace/repo/CHANGELOG.md',
+    '/workspace/docs/credentials.md',
+    '/workspace/docs/tokenizer.md',
+    '/workspace/docs/file..txt',
+    '/workspace/.ssh/id_ed25519.pub',
+    '/workspace/data/sample.csv',
+  ];
+
+  for (const path of riskyPaths) {
+    const params = { path, limit: 80 };
+    const result = applyLocalSafetyDowngrade(
+      allowed,
+      'read',
+      params,
+      localAction('read', params),
+    );
+    assert.equal(result.kind, 'review', path);
+    assert.equal(result.local_guard, true, path);
+  }
+  for (const path of safePaths) {
+    const params = { path, limit: 80 };
+    assert.strictEqual(
+      applyLocalSafetyDowngrade(allowed, 'read', params, localAction('read', params)),
+      allowed,
+      path,
+    );
+  }
+});
+
+test('applyLocalSafetyDowngrade only preserves non-sensitive gateway config.get', () => {
+  const allowed = normalizeVerdict(verdict());
+  const safeParams = { action: 'config.get', path: 'agents.defaults.thinkingDefault' };
+
+  assert.strictEqual(
+    applyLocalSafetyDowngrade(
+      allowed,
+      'gateway',
+      safeParams,
+      localAction('gateway', safeParams),
+    ),
+    allowed,
+  );
+  const safeBoundary = { action: 'config.get', path: 'models.defaults.maxTokens' };
+  assert.strictEqual(
+    applyLocalSafetyDowngrade(
+      allowed,
+      'gateway',
+      safeBoundary,
+      localAction('gateway', safeBoundary),
+    ),
+    allowed,
+  );
+  for (const path of [
+    'models.providers.openai.apiKeyPath',
+    'auth.passwordFile',
+    'agents.defaults.tokenBudget',
+    'models.providers.openai.baseUrl',
+  ]) {
+    const params = { action: 'config.get', path };
+    assert.strictEqual(
+      applyLocalSafetyDowngrade(allowed, 'gateway', params, localAction('gateway', params)),
+      allowed,
+      path,
+    );
+  }
+
+  for (const params of [
+    { action: 'config.get', path: 'models.providers.openai.apiKey' },
+    { action: 'config.get', path: 'models.providers.openai.apiKey.baseUrl' },
+    { action: 'config.get', path: 'models.providers.openai.botToken' },
+    { action: 'config.get', path: 'models.providers.openai' },
+    { action: 'config.get', path: 'models.providers.openai.customSetting' },
+    { action: 'config.get', path: 'auth' },
+    { action: 'config.get', path: 'auth.customSetting' },
+    { action: 'config.get', path: 'secrets' },
+    { action: 'config.get', path: 'credentials' },
+    { action: 'config.get', path: 'auth.clientSecret' },
+    { action: 'update.run' },
+    { action: 'config.patch', path: 'agents.defaults.model' },
+    { action: 'config.get' },
+    {},
+  ]) {
+    const result = applyLocalSafetyDowngrade(
+      allowed,
+      'gateway',
+      params,
+      localAction('gateway', params),
+    );
+    assert.equal(result.kind, 'review', JSON.stringify(params));
+    assert.equal(result.local_guard, true, JSON.stringify(params));
+  }
+});
+
+test('applyLocalSafetyDowngrade requires sessions_history to target the trusted current session', () => {
+  const allowed = normalizeVerdict(verdict());
+  const ownParams = { sessionKey: 'agent:main:main', limit: 15, includeTools: false };
+
+  assert.strictEqual(
+    applyLocalSafetyDowngrade(
+      allowed,
+      'sessions_history',
+      ownParams,
+      localAction('sessions_history', ownParams, 'agent:main:main'),
+    ),
+    allowed,
+  );
+
+  for (const [params, trustedSession] of [
+    [{ sessionKey: 'agent:finance:private', limit: 15 }, 'agent:main:main'],
+    [{ limit: 15 }, 'agent:main:main'],
+    [{ sessionKey: 'agent:main:main', limit: 15 }, 'agent:other:main'],
+    [{ sessionKey: '   ', limit: 15 }, 'agent:main:main'],
+  ]) {
+    const result = applyLocalSafetyDowngrade(
+      allowed,
+      'sessions_history',
+      params,
+      localAction('sessions_history', params, trustedSession),
+    );
+    assert.equal(result.kind, 'review');
+    assert.equal(result.local_guard, true);
+  }
+});
+
 test('applyLocalSafetyDowngrade reviews every state-changing cron action', () => {
   const allowed = normalizeVerdict(verdict());
 
   for (const action of ['add', 'update', 'remove', 'run', '', undefined]) {
-    const result = applyLocalSafetyDowngrade(allowed, 'cron', { action });
+    const params = { action };
+    const result = applyLocalSafetyDowngrade(
+      allowed,
+      'cron',
+      params,
+      localAction('cron', params),
+    );
     assert.deepEqual(result, {
       kind: 'review',
       reason: 'local safety guard requires human review',
@@ -484,8 +647,9 @@ test('applyLocalSafetyDowngrade preserves allow for cron inspection actions', ()
   const allowed = normalizeVerdict(verdict());
 
   for (const action of ['list', 'status', 'get', 'runs']) {
+    const params = { action };
     assert.strictEqual(
-      applyLocalSafetyDowngrade(allowed, 'cron', { action }),
+      applyLocalSafetyDowngrade(allowed, 'cron', params, localAction('cron', params)),
       allowed,
     );
   }
@@ -515,7 +679,12 @@ test('applyLocalSafetyDowngrade reviews writes to active automation and registry
   ];
 
   for (const [toolName, params] of riskyCalls) {
-    const result = applyLocalSafetyDowngrade(allowed, toolName, params);
+    const result = applyLocalSafetyDowngrade(
+      allowed,
+      toolName,
+      params,
+      localAction(toolName, params),
+    );
     assert.deepEqual(result, {
       kind: 'review',
       reason: 'local safety guard requires human review',
@@ -561,7 +730,12 @@ test('applyLocalSafetyDowngrade reviews browser uploads and real external messag
   ];
 
   for (const [toolName, params] of riskyCalls) {
-    const result = applyLocalSafetyDowngrade(allowed, toolName, params);
+    const result = applyLocalSafetyDowngrade(
+      allowed,
+      toolName,
+      params,
+      localAction(toolName, params),
+    );
     assert.deepEqual(result, {
       kind: 'review',
       reason: 'local safety guard requires human review',
@@ -570,28 +744,41 @@ test('applyLocalSafetyDowngrade reviews browser uploads and real external messag
     });
   }
 
-  assert.strictEqual(
-    applyLocalSafetyDowngrade(allowed, 'message', {
+  const dryRunMessage = {
       action: 'send',
       channel: 'slack',
       target: '#ops',
       message: 'Deploy started.',
       dryRun: true,
-    }),
+    };
+  assert.strictEqual(
+    applyLocalSafetyDowngrade(
+      allowed,
+      'message',
+      dryRunMessage,
+      localAction('message', dryRunMessage),
+    ),
     allowed,
   );
   for (const action of ['read', 'list-pins', 'thread-list', 'search', 'channel-info']) {
+    const params = { action };
     assert.strictEqual(
-      applyLocalSafetyDowngrade(allowed, 'message', { action }),
+      applyLocalSafetyDowngrade(allowed, 'message', params, localAction('message', params)),
       allowed,
     );
   }
+  const browserSnapshot = {
+    action: 'snapshot',
+    snapshotFormat: 'ai',
+    compact: true,
+  };
   assert.strictEqual(
-    applyLocalSafetyDowngrade(allowed, 'browser', {
-      action: 'snapshot',
-      snapshotFormat: 'ai',
-      compact: true,
-    }),
+    applyLocalSafetyDowngrade(
+      allowed,
+      'browser',
+      browserSnapshot,
+      localAction('browser', browserSnapshot),
+    ),
     allowed,
   );
 });
@@ -630,7 +817,12 @@ test('applyLocalSafetyDowngrade reviews startup and security-policy source write
 
   for (const [toolName, params] of riskyCalls) {
     assert.equal(
-      applyLocalSafetyDowngrade(allowed, toolName, params).kind,
+      applyLocalSafetyDowngrade(
+        allowed,
+        toolName,
+        params,
+        localAction(toolName, params),
+      ).kind,
       'review',
     );
   }
@@ -656,7 +848,12 @@ test('applyLocalSafetyDowngrade does not flag inert file contrasts', () => {
 
   for (const [toolName, params] of safeCalls) {
     assert.strictEqual(
-      applyLocalSafetyDowngrade(allowed, toolName, params),
+      applyLocalSafetyDowngrade(
+        allowed,
+        toolName,
+        params,
+        localAction(toolName, params),
+      ),
       allowed,
     );
   }
@@ -664,7 +861,7 @@ test('applyLocalSafetyDowngrade does not flag inert file contrasts', () => {
 
 test('applyLocalSafetyDowngrade never upgrades a non-allow result or inspects hostile params', () => {
   let trapCalls = 0;
-  const hostileParams = new Proxy({}, {
+  const hostileHandler = {
     get() {
       trapCalls += 1;
       throw new Error('must not execute');
@@ -681,7 +878,9 @@ test('applyLocalSafetyDowngrade never upgrades a non-allow result or inspects ho
       trapCalls += 1;
       throw new Error('must not execute');
     },
-  });
+  };
+  const hostileParams = new Proxy({}, hostileHandler);
+  const hostileLocalAction = new Proxy({}, hostileHandler);
 
   for (const result of [
     normalizeVerdict(verdict({ decision: 'deny' })),
@@ -689,7 +888,7 @@ test('applyLocalSafetyDowngrade never upgrades a non-allow result or inspects ho
     { kind: 'failure', reason: 'judge unavailable' },
   ]) {
     assert.strictEqual(
-      applyLocalSafetyDowngrade(result, 'write', hostileParams),
+      applyLocalSafetyDowngrade(result, 'write', hostileParams, hostileLocalAction),
       result,
     );
   }
@@ -733,12 +932,41 @@ test('applyLocalSafetyDowngrade fails closed without executing proxy or accessor
       throw new Error('must not execute');
     },
   });
+  const accessorAction = localAction('write', {});
+  Object.defineProperty(accessorAction, 'params', {
+    enumerable: true,
+    get() {
+      trapCalls += 1;
+      throw new Error('must not execute');
+    },
+  });
+  const cyclicAction = localAction('write', {});
+  cyclicAction.params.self = cyclicAction.params;
+  const stalePolicyAction = localAction('write', {});
+  stalePolicyAction.policy_version = '2026-07-14.1';
+  const mismatchedToolAction = localAction('read', {});
 
   const results = [
-    applyLocalSafetyDowngrade(new Proxy({}, proxyHandler), 'write', {}),
-    applyLocalSafetyDowngrade(accessorResult, 'write', {}),
-    applyLocalSafetyDowngrade(allowed, 'write', new Proxy({}, proxyHandler)),
-    applyLocalSafetyDowngrade(allowed, 'write', accessorParams),
+    applyLocalSafetyDowngrade(new Proxy({}, proxyHandler), 'write', {}, localAction('write', {})),
+    applyLocalSafetyDowngrade(accessorResult, 'write', {}, localAction('write', {})),
+    applyLocalSafetyDowngrade(
+      allowed,
+      'write',
+      new Proxy({}, proxyHandler),
+      localAction('write', {}),
+    ),
+    applyLocalSafetyDowngrade(
+      allowed,
+      'write',
+      accessorParams,
+      localAction('write', {}),
+    ),
+    applyLocalSafetyDowngrade(allowed, 'write', {}, new Proxy({}, proxyHandler)),
+    applyLocalSafetyDowngrade(allowed, 'write', {}, accessorAction),
+    applyLocalSafetyDowngrade(allowed, 'write', {}, undefined),
+    applyLocalSafetyDowngrade(allowed, 'write', {}, cyclicAction),
+    applyLocalSafetyDowngrade(allowed, 'write', {}, stalePolicyAction),
+    applyLocalSafetyDowngrade(allowed, 'write', {}, mismatchedToolAction),
   ];
 
   assert.deepEqual(results.slice(0, 2), [

@@ -4,6 +4,7 @@ import {
   APPROVAL_TIMEOUT_MS,
   MIN_CONFIDENCE,
   PLUGIN_ID,
+  POLICY_VERSION,
 } from './constants.js';
 import {
   JUDGE_DECISIONS,
@@ -83,6 +84,81 @@ const ACTIVE_GIT_HOOKS = new Set([
 ]);
 const PATCH_FILE_HEADER = /^\*\*\* (?:Add|Delete|Update) File: (.+)$/u;
 const PATCH_MOVE_HEADER = /^\*\*\* Move to: (.+)$/u;
+const LOCAL_ACTION_KEYS = new Set([
+  'policy_version',
+  'tool_name',
+  'params',
+  'agent_id',
+  'session_key',
+  'run_id',
+  'tool_call_id',
+]);
+const INERT_TEMPLATE_NAME = /(?:^|[._-])(?:example|sample|template|tmpl)$/u;
+const DOCUMENTATION_FILE = /\.(?:adoc|markdown|md|rst)$/u;
+const ENV_FILE = /^\.env(?:\..+)?$/u;
+const PRIVATE_KEY_FILE = /^(?:id_(?:dsa|ecdsa|ed25519|rsa)|.*(?:private[._-]?key|privkey).*)$/u;
+const PUBLIC_KEY_FILE = /^(?:id_(?:dsa|ecdsa|ed25519|rsa)|.*(?:public[._-]?key|pubkey).*)\.pub$/u;
+const CREDENTIAL_NAME = /(?:^|[._-])(?:api[._-]?key|credentials?|secrets?|tokens?)(?:[._-]|$)/u;
+const SENSITIVE_READ_FILES = new Set([
+  '.netrc',
+  '.npmrc',
+  '.pypirc',
+  '.yarnrc',
+  '.yarnrc.yml',
+  'credentials',
+  'credentials.json',
+  'kubeconfig',
+  'service-account.json',
+  'service_account.json',
+]);
+const SENSITIVE_READ_DIRECTORIES = new Set([
+  '.kube',
+  '.ssh',
+  'credentials',
+  'secrets',
+  'vault',
+]);
+const SECRET_CONFIG_COMPONENTS = new Set([
+  'accesskey',
+  'accesstoken',
+  'apikey',
+  'apikeys',
+  'apitoken',
+  'authorization',
+  'authtoken',
+  'bottoken',
+  'clientsecret',
+  'credential',
+  'credentials',
+  'idtoken',
+  'password',
+  'passwordhash',
+  'passwd',
+  'privatekey',
+  'refreshtoken',
+  'secret',
+  'secretaccesskey',
+  'secretkey',
+  'secrets',
+  'sessiontoken',
+  'token',
+]);
+const SAFE_CONFIG_METADATA_COMPONENTS = new Set([
+  'apikeypath',
+  'baseurl',
+  'count',
+  'enabled',
+  'endpoint',
+  'maxtokens',
+  'model',
+  'models',
+  'passwordfile',
+  'secretpath',
+  'thinkingdefault',
+  'tokenbudget',
+  'timeoutms',
+]);
+const SENSITIVE_CONFIG_CONTAINERS = new Set(['auth', 'credentials', 'secrets']);
 
 function isPlainObject(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -272,6 +348,73 @@ function localReview(result) {
   };
 }
 
+function localActionSnapshot(value, expectedToolName) {
+  try {
+    if (!isDataOnly(value)) return null;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+    if (keys.length !== LOCAL_ACTION_KEYS.size
+      || keys.some((key) => typeof key !== 'string' || !LOCAL_ACTION_KEYS.has(key))) {
+      return null;
+    }
+    for (const key of LOCAL_ACTION_KEYS) {
+      const descriptor = descriptors[key];
+      if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+        return null;
+      }
+    }
+    if (descriptors.policy_version.value !== POLICY_VERSION
+      || descriptors.tool_name.value !== expectedToolName
+      || !isPlainObject(descriptors.params.value)) return null;
+    return Object.freeze({
+      params: descriptors.params.value,
+      sessionKey: descriptors.session_key.value,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function pathHasRawTraversal(path) {
+  return /(?:^|[\\/])(?:[a-zA-Z]:)?\.\.(?=[\\/]|$)/u.test(path);
+}
+
+function targetsCredentialMaterial(path) {
+  if (pathHasRawTraversal(path)) return true;
+  const segments = path
+    .replaceAll('\\', '/')
+    .split('/')
+    .filter((segment) => segment !== '')
+    .map((segment) => segment.toLowerCase());
+  if (segments.length === 0) return true;
+  const name = segments.at(-1);
+
+  if (INERT_TEMPLATE_NAME.test(name) || PUBLIC_KEY_FILE.test(name)) return false;
+  if (ENV_FILE.test(name)
+    || SENSITIVE_READ_FILES.has(name)
+    || PRIVATE_KEY_FILE.test(name)) return true;
+  if (segments.at(-2) === '.kube' && name === 'config') return true;
+  if (DOCUMENTATION_FILE.test(name)) return false;
+  if (CREDENTIAL_NAME.test(name)) return true;
+  return segments.slice(0, -1).some((segment) => SENSITIVE_READ_DIRECTORIES.has(segment));
+}
+
+function gatewayPathIsSensitive(path) {
+  const components = path
+    .split(/[./:\[\]\\]+/u)
+    .filter((component) => component !== '')
+    .map((component) => component.toLowerCase().replace(/[^a-z0-9]+/gu, ''));
+  if (components.length === 0 || components.some((component) => component === '')) return true;
+  const last = components.at(-1);
+  if (components.some((component) => SECRET_CONFIG_COMPONENTS.has(component))) return true;
+  if (SAFE_CONFIG_METADATA_COMPONENTS.has(last)) return false;
+  if (components.some((component) => SENSITIVE_CONFIG_CONTAINERS.has(component))) return true;
+  const providersIndex = components.findIndex((component, index) => (
+    component === 'models' && components[index + 1] === 'providers'
+  ));
+  return providersIndex >= 0;
+}
+
 function targetsActiveAutomation(path) {
   if (typeof path !== 'string' || !path) return null;
   const normalized = pathPosix.normalize(
@@ -310,7 +453,7 @@ function fileTargets(params, toolName) {
   return targets.length > 0 ? targets : null;
 }
 
-export function applyLocalSafetyDowngrade(result, toolName, visibleParams) {
+export function applyLocalSafetyDowngrade(result, toolName, visibleParams, localAction) {
   const kind = ownDataValue(result, 'kind');
   if (!kind.ok || typeof kind.value !== 'string') {
     return { kind: 'failure', reason: INVALID_LOCAL_GUARD_REASON };
@@ -318,6 +461,35 @@ export function applyLocalSafetyDowngrade(result, toolName, visibleParams) {
   if (kind.value !== 'allow') return result;
   if (typeof toolName !== 'string' || !toolName || !isDataOnly(visibleParams)) {
     return localReview(result);
+  }
+  const action = localActionSnapshot(localAction, toolName);
+  if (action === null) return localReview(result);
+
+  if (toolName === 'read') {
+    const path = ownDataValue(action.params, 'path');
+    if (!path.ok || typeof path.value !== 'string' || path.value.trim() === ''
+      || targetsCredentialMaterial(path.value)) return localReview(result);
+    return result;
+  }
+
+  if (toolName === 'gateway') {
+    const actionName = ownDataValue(action.params, 'action');
+    const path = ownDataValue(action.params, 'path');
+    if (!actionName.ok || actionName.value !== 'config.get'
+      || !path.ok || typeof path.value !== 'string' || path.value.trim() === ''
+      || gatewayPathIsSensitive(path.value)) return localReview(result);
+    return result;
+  }
+
+  if (toolName === 'sessions_history') {
+    const requestedSession = ownDataValue(action.params, 'sessionKey');
+    if (!requestedSession.ok
+      || typeof requestedSession.value !== 'string'
+      || requestedSession.value.trim() === ''
+      || typeof action.sessionKey !== 'string'
+      || action.sessionKey.trim() === ''
+      || requestedSession.value !== action.sessionKey) return localReview(result);
+    return result;
   }
 
   if (toolName === 'message') {

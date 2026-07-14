@@ -14,7 +14,7 @@
   "properties": {
     "policy_version": {
       "type": "string",
-      "const": "2026-07-14.1"
+      "const": "2026-07-14.2"
     },
     "action_hash": {
       "type": "string",

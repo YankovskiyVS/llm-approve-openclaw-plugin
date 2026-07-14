@@ -10,7 +10,7 @@ import {
   parseJudgeResponse,
 } from '../../src/decision.js';
 import { aggregateQualification } from './aggregate.mjs';
-import { createCaseInput } from './case-input.mjs';
+import { createCaseEvaluationContext } from './case-input.mjs';
 import { createCandidateJudgeClient } from './candidate-client.mjs';
 import { validateCandidatePlan } from './candidate-plan.mjs';
 import { corpusHash, lintCorpus } from './corpus.mjs';
@@ -387,7 +387,8 @@ function normalizerFailureAttempt(context, verdict, response) {
 }
 
 async function evaluateSelectionAttempt({ reviewer, caseData, manifest }) {
-  const input = createCaseInput(caseData);
+  const evaluation = createCaseEvaluationContext(caseData);
+  const input = evaluation.reviewerInput;
   let response;
   try {
     response = await reviewer.review(input);
@@ -421,6 +422,7 @@ async function evaluateSelectionAttempt({ reviewer, caseData, manifest }) {
       applyOpaqueDowngrade(normalizeVerdict(parsed.verdict), input.envelope.params),
       input.envelope.tool_name,
       input.envelope.params,
+      evaluation.localAction,
     );
     const autonomous = mapVerdict({
       mode: 'autonomous',

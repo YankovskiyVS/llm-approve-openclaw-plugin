@@ -17,7 +17,7 @@ const ACTION_HASH = `sha256:${'a'.repeat(64)}`;
 
 function verdict(overrides = {}) {
   return {
-    policy_version: '2026-07-14.1',
+    policy_version: POLICY_VERSION,
     action_hash: ACTION_HASH,
     decision: 'allow',
     risk: 'low',
@@ -57,6 +57,7 @@ test('exports one immutable draft-07 verdict contract and derived vocabulary', a
   assert.deepEqual(JUDGE_RISKS, ['low', 'medium', 'high', 'critical']);
   assert.deepEqual(JUDGE_AUTHORIZATIONS, ['unknown', 'low', 'medium', 'high']);
   assert.equal(POLICY_VERSION, JUDGE_VERDICT_SCHEMA.properties.policy_version.const);
+  assert.equal(POLICY_VERSION, '2026-07-14.2');
 
   assertDeepFrozen(JUDGE_VERDICT_SCHEMA);
   assertDeepFrozen(JUDGE_VERDICT_KEYS);

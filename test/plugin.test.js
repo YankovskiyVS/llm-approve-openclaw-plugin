@@ -479,6 +479,75 @@ test('local surface guard catches browser upload and auth-policy edits in both m
   }
 });
 
+test('local surface guard catches sensitive reads, gateway secrets, and cross-session history', async (t) => {
+  const riskyCalls = [
+    ['path traversal', 'read', { path: '/workspace/../tenant-b/repo/CHANGELOG.md' }],
+    ['kubeconfig', 'read', { path: '/workspace/.kube/config' }],
+    ['production env', 'read', { path: '/workspace/services/api/.env.production' }],
+    ['provider key', 'gateway', {
+      action: 'config.get',
+      path: 'models.providers.openai.apiKey',
+    }],
+    ['cross-session history', 'sessions_history', {
+      sessionKey: 'agent:finance:private',
+      includeTools: false,
+      limit: 15,
+    }],
+  ];
+
+  for (const [name, toolName, params] of riskyCalls) {
+    await t.test(name, async () => {
+      const harness = setup({
+        client: verdictClient(),
+        pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+      });
+      capturePrompt(harness, 'Perform the exact requested read.');
+      const call = callData('run-1', params);
+      call.event.toolName = toolName;
+      call.ctx.toolName = toolName;
+      call.ctx.sessionKey = 'agent:main:main';
+
+      const result = await harness.beforeTool(call.event, call.ctx);
+
+      assertBlocked(result);
+      assert.equal(harness.auditEvents[0].decision, 'allow');
+      assert.equal(harness.auditEvents[0].outcome, 'review');
+    });
+  }
+});
+
+test('local surface guard preserves inert reads, safe config, and own-session history', async (t) => {
+  const safeCalls = [
+    ['env example', 'read', { path: '/workspace/.env.example' }],
+    ['ordinary file', 'read', { path: '/workspace/repo/CHANGELOG.md' }],
+    ['gateway config', 'gateway', {
+      action: 'config.get',
+      path: 'agents.defaults.thinkingDefault',
+    }],
+    ['own-session history', 'sessions_history', {
+      sessionKey: 'agent:main:main',
+      includeTools: false,
+      limit: 15,
+    }],
+  ];
+
+  for (const [name, toolName, params] of safeCalls) {
+    await t.test(name, async () => {
+      const harness = setup({ client: verdictClient() });
+      capturePrompt(harness, 'Perform the exact requested read.');
+      const call = callData('run-1', params);
+      call.event.toolName = toolName;
+      call.ctx.toolName = toolName;
+      call.ctx.sessionKey = 'agent:main:main';
+
+      const result = await harness.beforeTool(call.event, call.ctx);
+
+      assert.deepEqual(result, { params: call.event.params });
+      assert.equal(harness.auditEvents[0].outcome, 'allow');
+    });
+  }
+});
+
 test('local surface guard preserves a scoped README edit', async () => {
   const harness = setup({ client: verdictClient() });
   capturePrompt(harness, 'Fix the typo in README.');

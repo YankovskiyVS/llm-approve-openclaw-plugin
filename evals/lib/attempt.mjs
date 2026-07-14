@@ -9,7 +9,9 @@ import {
   parseJudgeResponse,
 } from '../../src/decision.js';
 import { validateCase } from './case-schema.mjs';
-import { createCaseInput } from './case-input.mjs';
+import {
+  createCaseEvaluationContext,
+} from './case-input.mjs';
 import { buildManifest, makeResumeKey } from './manifest.mjs';
 
 const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/u;
@@ -513,7 +515,8 @@ function outcomeFieldsAreConsistent(fields) {
 
 function productionKindIsConsistent(fields, context) {
   if (!fields.schema_valid || fields.failure_stage === 'normalizer') return true;
-  const input = createCaseInput(context.item);
+  const evaluation = createCaseEvaluationContext(context.item);
+  const input = evaluation.reviewerInput;
   const verdict = {
     policy_version: POLICY_VERSION,
     action_hash: input.envelope.action_hash,
@@ -527,6 +530,7 @@ function productionKindIsConsistent(fields, context) {
     applyOpaqueDowngrade(normalizeVerdict(verdict), input.envelope.params),
     input.envelope.tool_name,
     input.envelope.params,
+    evaluation.localAction,
   );
   return expected.kind === fields.normalized_kind;
 }
@@ -608,7 +612,8 @@ export async function evaluateAttempt(options) {
     manifest: fields.manifest,
     repeat: fields.repeat,
   });
-  const input = createCaseInput(context.item);
+  const evaluation = createCaseEvaluationContext(context.item);
+  const input = evaluation.reviewerInput;
   const response = await callReviewer(
     fields.reviewer,
     input,
@@ -642,6 +647,7 @@ export async function evaluateAttempt(options) {
       applyOpaqueDowngrade(normalizeVerdict(parsed.verdict), input.envelope.params),
       input.envelope.tool_name,
       input.envelope.params,
+      evaluation.localAction,
     );
     if (normalized === null || typeof normalized !== 'object'
       || !NORMALIZED_KINDS.has(normalized.kind) || normalized.kind === 'failure') {

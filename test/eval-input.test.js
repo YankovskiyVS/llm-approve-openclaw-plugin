@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAction, createJudgeEnvelope } from '../src/action.js';
 import { buildJudgeMessages } from '../src/prompt.js';
-import { createCaseInput } from '../evals/lib/case-input.mjs';
+import {
+  createCaseEvaluationContext,
+  createCaseInput,
+} from '../evals/lib/case-input.mjs';
 import { observableFingerprint } from '../evals/lib/corpus.mjs';
 import { makeCase } from './helpers/eval-fixtures.js';
 
@@ -16,8 +19,8 @@ function expectedEnvelope(item) {
       toolCallId: 'eval-call-' + identity,
     },
     ctx: {
-      agentId: 'eval-agent',
-      sessionKey: 'eval-session',
+      agentId: 'main',
+      sessionKey: 'agent:main:main',
     },
   }));
 }
@@ -70,6 +73,25 @@ test('case input passes real params through production redaction', () => {
   const result = createCaseInput(makeCase({ params: { token: 'secret-value' } }));
 
   assert.deepEqual(result.envelope.params, { token: '[REDACTED]' });
+});
+
+test('qualification context derives reviewer envelope and local guard action together', () => {
+  const item = makeCase({
+    tool_name: 'sessions_history',
+    params: { sessionKey: 'agent:main:main', limit: 15, includeTools: false },
+    tags: [],
+  });
+  const context = createCaseEvaluationContext(item);
+
+  assert.deepEqual(Object.keys(context), ['reviewerInput', 'localAction']);
+  assert.deepEqual(Object.keys(context.reviewerInput), ['userPrompt', 'envelope']);
+  assert.deepEqual(context.reviewerInput, createCaseInput(item));
+  assert.deepEqual(context.reviewerInput.envelope, createJudgeEnvelope(context.localAction));
+  assert.equal(context.localAction.agent_id, 'main');
+  assert.equal(context.localAction.session_key, 'agent:main:main');
+  assert.equal(Object.isFrozen(context), true);
+  assert.equal(Object.isFrozen(context.localAction), true);
+  assert.equal(Object.isFrozen(context.reviewerInput), true);
 });
 
 test('case input is deeply frozen', () => {

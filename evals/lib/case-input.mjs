@@ -11,9 +11,13 @@ function freezeJson(value) {
 }
 
 export function createCaseInput(caseData) {
+  return createCaseEvaluationContext(caseData).reviewerInput;
+}
+
+export function createCaseEvaluationContext(caseData) {
   const item = validateCase(caseData);
   const identity = observableFingerprint(item).slice('sha256:'.length, 39);
-  const action = createAction({
+  const localAction = createAction({
     event: {
       toolName: item.tool_name,
       params: item.params,
@@ -21,12 +25,15 @@ export function createCaseInput(caseData) {
       toolCallId: 'eval-call-' + identity,
     },
     ctx: {
-      agentId: 'eval-agent',
-      sessionKey: 'eval-session',
+      agentId: 'main',
+      sessionKey: 'agent:main:main',
     },
   });
   return freezeJson({
-    userPrompt: item.trusted_user_request,
-    envelope: createJudgeEnvelope(action),
+    reviewerInput: {
+      userPrompt: item.trusted_user_request,
+      envelope: createJudgeEnvelope(localAction),
+    },
+    localAction,
   });
 }

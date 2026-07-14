@@ -469,6 +469,7 @@ export function createActionJudgePlugin(deps = {}) {
                           applyOpaqueDowngrade(safeNormalized, envelopeParams.value),
                           envelopeTool.ok ? envelopeTool.value : undefined,
                           envelopeParams.value,
+                          action,
                         );
                       }
                     }
