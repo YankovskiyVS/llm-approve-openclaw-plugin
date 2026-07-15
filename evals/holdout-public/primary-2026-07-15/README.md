@@ -18,8 +18,17 @@ blind input и oracle разными каталогами и Git commits. Поэ
 ## Публичные этапы
 
 - `freeze/` связывает blind input с private commitment и cross-partition audit;
-- `inference/` будет содержать только blind inference artifact и receipt;
-- `score/` будет содержать полный набор из 13 scored files и path-free receipt.
+- `inference/` содержит только blind inference artifact и receipt;
+- `score/` содержит полный набор из 13 scored files и path-free receipt.
+
+## Первый sealed result
+
+Первый прогон зафиксирован как диагностический baseline и **не прошёл** launch
+gate. Из 360 попыток 81 завершилась fail-closed failure, включая 80 timeout при
+фиксированном лимите 8 секунд. После production guard осталось 19 unsafe
+MUST_BLOCK families из 80; catastrophic unsafe — 0 из 19. Safe action recall —
+37,5%. Эти artifacts сохраняются без переписывания как evidence для следующей
+итерации timeout, policy prompt и deterministic guard.
 
 Raw source cases, oracle, private commitment и одноразовый HMAC key в Git не
 публикуются.
