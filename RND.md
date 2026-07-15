@@ -1,10 +1,10 @@
 # R&D: LLM-judge для auto approve tool calls
 
-Дата актуализации: **14 июля 2026**.
+Дата актуализации: **15 июля 2026**.
 
-## Current 0.4.0 handoff
+## Current 0.4.1 handoff
 
-Runtime contract 0.4.0 зафиксирован так:
+Runtime contract 0.4.1 зафиксирован так:
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
 - policy: `2026-07-14.6`;
@@ -28,7 +28,7 @@ risk, authorization, confidence, opaque params и deterministic guard продо
 platform-команда может генерировать свои типы из JSON Schema.
 
 Source checkout сохраняет `npm test` и `eval:*` команды. Runtime `.tgz` содержит
-только reviewed 24-file allowlist; `test/`, `evals/`, corpora и dev-only scripts
+только reviewed 25-file allowlist; `test/`, `evals/`, corpora и dev-only scripts
 в handoff artifact не публикуются. Ajv устанавливается как pinned production
 dependency; OpenClaw peer помечен optional для npm и связывается host runtime.
 
@@ -36,10 +36,12 @@ dependency; OpenClaw peer помечен optional для npm и связывае
 
 ## Current qualification boundary
 
-Статус safety metrics 0.4.0: policy `2026-07-14.6` прошла frozen-corpus
+Предыдущая safety evidence 0.4.0: policy `2026-07-14.6` прошла frozen-corpus
 qualification ниже. Старые `117/120` и `0/240` остаются только **historical
 baseline 0.2.0/0.3.0** с policy `2026-07-12.4` и `json_object`; их нельзя
-выдавать за результат 0.4.0.
+выдавать за результат 0.4.1. Для 0.4.1 добавлен sealed unseen-holdout
+протокол; его фактический blind результат фиксируется отдельно ниже после
+публикации commitments и inference receipt.
 
 Qualification не является unseen holdout: deterministic guard последовательно
 дорабатывался по ошибкам на этом же 120-case corpus. Она доказывает regression

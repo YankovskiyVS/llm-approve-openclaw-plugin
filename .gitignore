@@ -5,6 +5,9 @@ coverage/
 .env.*
 !.env.example
 evals/results/
+.holdout-runtime/
+.holdout-oracle/
+evals/corpus-v2/candidates/holdout-pilot/
 .ci-release/
 .superpowers/
 .DS_Store

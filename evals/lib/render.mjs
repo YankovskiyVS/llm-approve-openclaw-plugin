@@ -23,7 +23,7 @@ const FAMILY_OUTCOME_KEYS = Object.freeze([
 const SUMMARY_KEYS = Object.freeze([
   'denominators', 'raw_matrix', 'autonomous_matrix', 'supervised_matrix',
   'risk_confusion', 'authorization_confusion', 'confidence_buckets',
-  'family', 'rates', 'bounds', 'latency_ms', 'usage',
+  'family', 'raw_family', 'rates', 'bounds', 'latency_ms', 'usage',
 ]);
 const RATE_KEYS = Object.freeze([
   'unsafe_auto_allow', 'safe_action_recall', 'safe_overblock',
@@ -45,6 +45,9 @@ const DENOMINATOR_KEYS = Object.freeze([
 ]);
 const FAMILY_KEYS = Object.freeze([
   'must_block', 'must_allow', 'catastrophic', 'common_read_status',
+]);
+const RAW_FAMILY_KEYS = Object.freeze([
+  'must_block', 'must_allow', 'gate_saves', 'gate_friction',
 ]);
 const MUST_BLOCK_KEYS = Object.freeze(['total', 'unsafe']);
 const MUST_ALLOW_KEYS = Object.freeze(['total', 'passed']);
@@ -245,6 +248,7 @@ function summarySections(summary) {
     values,
     denominators: exactDataValues(values.denominators, DENOMINATOR_KEYS),
     family: exactDataValues(values.family, FAMILY_KEYS),
+    rawFamily: exactDataValues(values.raw_family, RAW_FAMILY_KEYS),
     rates: exactDataValues(values.rates, RATE_KEYS),
     bounds: exactDataValues(values.bounds, BOUND_KEYS),
     latency: exactDataValues(values.latency_ms, LATENCY_KEYS),
@@ -265,6 +269,15 @@ function summarySections(summary) {
     const cohort = exactDataValues(result.family[key], expected);
     for (const value of Object.values(cohort)) requireInteger(value);
   }
+  for (const [key, expected] of [
+    ['must_block', MUST_BLOCK_KEYS],
+    ['must_allow', MUST_ALLOW_KEYS],
+  ]) {
+    const cohort = exactDataValues(result.rawFamily[key], expected);
+    for (const value of Object.values(cohort)) requireInteger(value);
+  }
+  requireInteger(result.rawFamily.gate_saves);
+  requireInteger(result.rawFamily.gate_friction);
   return result;
 }
 
@@ -415,6 +428,8 @@ export function renderReportMarkdown(summary, manifest) {
       sections.family.common_read_status,
       MUST_ALLOW_KEYS,
     );
+    const rawMustBlock = exactDataValues(sections.rawFamily.must_block, MUST_BLOCK_KEYS);
+    const rawMustAllow = exactDataValues(sections.rawFamily.must_allow, MUST_ALLOW_KEYS);
     for (const value of Object.values(sections.denominators)) requireInteger(value);
     for (const value of [
       mustBlock.total, mustBlock.unsafe, mustAllow.total, mustAllow.passed,
@@ -435,6 +450,10 @@ export function renderReportMarkdown(summary, manifest) {
       `- MUST_BLOCK unsafe: ${mustBlock.unsafe}/${mustBlock.total}`,
       `- Catastrophic unsafe: ${catastrophic.unsafe}/${catastrophic.total}`,
       `- Common read/status passed: ${commonReadStatus.passed}/${commonReadStatus.total}`,
+      `- Raw judge MUST_ALLOW passed: ${rawMustAllow.passed}/${rawMustAllow.total}`,
+      `- Raw judge MUST_BLOCK unsafe: ${rawMustBlock.unsafe}/${rawMustBlock.total}`,
+      `- Guard saves: ${sections.rawFamily.gate_saves}`,
+      `- Guard friction: ${sections.rawFamily.gate_friction}`,
       '',
       '## Rates and bounds',
       '',

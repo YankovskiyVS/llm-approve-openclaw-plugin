@@ -1,14 +1,22 @@
 # Security policy
 
-Поддерживаемый internal release: `openclaw-llm-action-judge` 0.4.0 с policy
+Поддерживаемый internal release: `openclaw-llm-action-judge` 0.4.1 с policy
 `2026-07-14.6` на OpenClaw
 `>=2026.6.11` и Node.js `>=22.19.0`.
 
 ## Security boundary
 
-Плагин связывает fixed judge verdict с exact action hash, принимает только
-strict seven-field JSON, повторно проверяет action после async call и работает
-fail-closed при setup/transport/timeout/schema/policy/hash/mutation failure.
+Плагин связывает fixed judge verdict с opaque keyed exact-action commitment,
+принимает только strict seven-field JSON, повторно проверяет action после async
+call и работает fail-closed при setup/transport/timeout/schema/policy/hash/
+mutation failure.
+
+Commitment — HMAC-SHA-256 canonical action со случайным 32-byte process-local
+key. Key не читается из ENV, не экспортируется, не сохраняется и не передаётся
+judge. Это не позволяет проверять словарь low-entropy redacted secrets по
+видимому `action_hash`. Прежний wire-формат `sha256:<64 lowercase hex>` сохранён,
+но значение намеренно ротируется при restart gateway и не является
+cross-process audit identifier.
 
 Cloud.ru constrains generation через `response_format.type=json_schema` и
 `strict=true`; тот же packaged contract локально проверяется Ajv.
@@ -105,9 +113,10 @@ Audit path обязан быть absolute `.jsonl` внутри
 отвергает parent/final symlink, hardlink, non-regular и чужой owner до
 chmod/append; файл удерживается в mode `0600`.
 
-Audit хранит только allowlisted metadata и hashed correlation IDs. Raw prompt,
-params, credentials, identifiers и rationale отсутствуют. Runtime audit I/O
-failure не меняет tool decision, поэтому monitoring audit availability обязателен.
+Audit хранит только allowlisted metadata, process-local opaque action commitment
+и hashed correlation IDs. Raw prompt, params, credentials, identifiers,
+commitment key и rationale отсутствуют. Runtime audit I/O failure не меняет tool
+decision, поэтому monitoring audit availability обязателен.
 
 OpenClaw host logs находятся вне контроля плагина и могут содержать action
 params. Ограничьте к ним доступ и retention.

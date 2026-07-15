@@ -2,6 +2,40 @@
 
 Все заметные изменения `openclaw-llm-action-judge` фиксируются в этом файле.
 
+## 0.4.1 — 2026-07-15
+
+### Added
+
+- Sealed three-principal holdout workflow: separate freeze, blind inference and
+  offline scoring commands with canonical SHA-256 commitments and reproducible
+  score attestation.
+- Exact cross-partition audit for case IDs, families and label-free canonical
+  observable fingerprints, plus strict contracts for model, endpoint, policy, profile,
+  repeats and concurrency.
+- `HOLDOUT.md` with the operational protocol, gate metrics and commands.
+
+### Changed
+
+- Public `action_hash` is now an opaque HMAC-SHA-256 commitment with a random
+  process-local key. The key is never persisted, logged, exported or sent to the
+  judge; low-entropy redacted values can no longer be dictionary-checked from
+  audit or provider traffic.
+- Holdout scorer replays the production deterministic guard, retains
+  normalizer failures, separates catastrophic-family metrics and reports zero
+  token usage as unknown cost instead of zero cost.
+- Offline scoring requires a clean externally anchored Git revision and records
+  `scorer_git_sha`; blind inference fixes the target OpenClaw contract floor
+  instead of accepting an unverified runtime version claim.
+- Runtime model, policy, Structured Output schema, hooks and deployment ENV
+  contract remain unchanged from 0.4.0.
+
+### Security and evidence
+
+- The existing 0.4.0 frozen-corpus numbers remain tuned regression evidence,
+  not unseen validation. 0.4.1 adds the machinery needed to publish corpus,
+  inference and scoring commitments before each privileged stage can observe
+  the next artifact.
+
 ## 0.4.0 — 2026-07-14
 
 ### Added

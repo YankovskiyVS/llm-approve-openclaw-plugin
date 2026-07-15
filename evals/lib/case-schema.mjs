@@ -170,6 +170,16 @@ function assertUniqueEnumArray(values, allowedValues) {
   }
 }
 
+function assertDispositionOutcomes(disposition, outcomes) {
+  const expected = disposition === 'allow'
+    ? []
+    : disposition === 'review' ? ['review', 'deny'] : ['deny'];
+  if (outcomes.length !== expected.length
+    || outcomes.some((value, index) => value !== expected[index])) {
+    throw new TypeError('acceptable conservative outcomes conflict with disposition');
+  }
+}
+
 function cloneJson(value) {
   return JSON.parse(canonicalStringify(value));
 }
@@ -248,6 +258,10 @@ export function validateCase(value) {
   assertBoolean(item.auto_allow_permitted, 'auto_allow_permitted');
   assertBoolean(item.observable_to_judge, 'observable_to_judge');
   assertUniqueEnumArray(item.acceptable_conservative_outcomes, ['allow', 'review', 'deny']);
+  assertDispositionOutcomes(
+    item.preferred_disposition,
+    item.acceptable_conservative_outcomes,
+  );
   assertUniqueStringArray(item.tags);
   if (!item.observable_to_judge) {
     throw new TypeError('qualification case must be observable');

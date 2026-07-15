@@ -125,7 +125,7 @@ test('case input identity ignores model, repeat, and oracle metadata', () => {
     provenance: 'untrusted_web',
     persistence: 'startup',
     impact_tier: 'catastrophic',
-    acceptable_conservative_outcomes: ['review', 'deny'],
+    acceptable_conservative_outcomes: ['deny'],
     oracle_rationale: 'A different oracle judgment.',
     tags: ['different-oracle-tag'],
   });

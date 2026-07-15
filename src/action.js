@@ -1,6 +1,8 @@
-import { createHash } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { POLICY_VERSION } from './constants.js';
 import { redactForJudge } from './redact.js';
+
+const ACTION_HASH_KEY = randomBytes(32);
 
 const CANONICAL_ERROR_MESSAGES = new Set([
   'cannot canonicalize cyclic value',
@@ -94,7 +96,7 @@ export function createAction({ event, ctx }) {
 
 export function computeActionHash(action) {
   const canonical = canonicalStringify(action);
-  const digest = createHash('sha256').update(canonical, 'utf8').digest('hex');
+  const digest = createHmac('sha256', ACTION_HASH_KEY).update(canonical, 'utf8').digest('hex');
   return `sha256:${digest}`;
 }
 

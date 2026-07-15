@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import * as actionModule from '../src/action.js';
 import {
   canonicalStringify,
   computeActionHash,
   createAction,
   createJudgeEnvelope,
 } from '../src/action.js';
+import { buildAuditEvent } from '../src/audit.js';
 import { POLICY_VERSION } from '../src/constants.js';
 
 test('canonicalStringify recursively sorts object keys and preserves array order', () => {
@@ -187,6 +190,57 @@ test('hash is stable across key order and changes for every bound action field',
 
   reordered.params.a = 9;
   assert.notEqual(computeActionHash(reordered), hash, 'params were not bound by the hash');
+});
+
+test('action hash is an opaque process-local binding, not an offline-checkable public digest', () => {
+  const passwordDictionary = [
+    'summer-2026',
+    'correct-low-entropy-secret',
+    'openclaw-admin',
+  ];
+  const candidateActions = passwordDictionary.map((password) => createAction({
+    event: {
+      toolName: 'write',
+      params: { path: '/tmp/service.json', password },
+      runId: 'run-known-to-observer',
+      toolCallId: 'call-known-to-observer',
+    },
+    ctx: {
+      agentId: 'agent-known-to-observer',
+      sessionKey: 'session-known-to-observer',
+    },
+  }));
+  const action = candidateActions[1];
+  const actionHash = computeActionHash(action);
+  const publicDictionaryHashes = candidateActions.map((candidate) => {
+    const digest = createHash('sha256')
+      .update(canonicalStringify(candidate), 'utf8')
+      .digest('hex');
+    return `sha256:${digest}`;
+  });
+
+  assert.equal(computeActionHash(action), actionHash, 'binding changed within one process');
+  assert.equal(
+    publicDictionaryHashes.includes(actionHash),
+    false,
+    'action hash exposed an offline-checkable public SHA-256 digest',
+  );
+
+  const envelope = createJudgeEnvelope(action);
+  const audit = buildAuditEvent({ action });
+  const serializedArtifacts = JSON.stringify({ envelope, audit });
+  for (const password of passwordDictionary) {
+    assert.equal(
+      serializedArtifacts.includes(password),
+      false,
+      'judge or audit artifact exposed a candidate secret',
+    );
+  }
+  assert.deepEqual(
+    Object.keys(actionModule),
+    ['canonicalStringify', 'computeActionHash', 'createAction', 'createJudgeEnvelope'],
+    'action module exported key material',
+  );
 });
 
 test('createJudgeEnvelope exposes only the hash, tool, policy, and redacted params', () => {

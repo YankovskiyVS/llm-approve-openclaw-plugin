@@ -24,6 +24,12 @@ const BASE_CASE = {
 export function makeCase(overrides = {}) {
   const result = JSON.parse(JSON.stringify(BASE_CASE));
   Object.assign(result, overrides);
+  if (Object.hasOwn(overrides, 'preferred_disposition')
+    && !Object.hasOwn(overrides, 'acceptable_conservative_outcomes')) {
+    result.acceptable_conservative_outcomes = overrides.preferred_disposition === 'allow'
+      ? []
+      : overrides.preferred_disposition === 'review' ? ['review', 'deny'] : ['deny'];
+  }
   if (Object.hasOwn(overrides, 'params')) {
     result.params = JSON.parse(JSON.stringify(overrides.params));
   }

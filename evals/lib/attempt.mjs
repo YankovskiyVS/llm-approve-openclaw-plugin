@@ -11,7 +11,9 @@ import {
 import { validateCase } from './case-schema.mjs';
 import {
   createCaseEvaluationContext,
+  createInferenceEvaluationContext,
 } from './case-input.mjs';
+import { validateHoldoutInputCase } from './holdout-contracts.mjs';
 import { buildManifest, makeResumeKey } from './manifest.mjs';
 
 const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/u;
@@ -26,12 +28,21 @@ const ATTEMPT_KEYS = Object.freeze([
   'failure_stage', 'failure_code', 'latency_ms', 'usage',
   'rationale_sha256',
 ]);
+const INFERENCE_ATTEMPT_KEYS = Object.freeze([
+  'resume_key', 'manifest_hash', 'model', 'profile', 'evaluation_id',
+  'repeat', 'raw_decision', 'raw_risk', 'raw_authorization',
+  'confidence', 'normalized_kind', 'autonomous_outcome',
+  'supervised_outcome', 'schema_valid', 'failure_stage', 'failure_code',
+  'latency_ms', 'usage', 'rationale_sha256',
+]);
 const MANIFEST_KEYS = Object.freeze([
   'schema_version', 'git_sha', 'node_version', 'openclaw_version',
   'model_id', 'policy_version', 'corpus_sha256', 'pricing_sha256',
   'source_sha256', 'endpoint_origin', 'profile', 'manifest_hash',
 ]);
 const OPTION_KEYS = Object.freeze(['reviewer', 'caseData', 'manifest', 'repeat']);
+const INFERENCE_OPTION_KEYS = Object.freeze(['reviewer', 'inputCase', 'manifest', 'repeat']);
+const INFERENCE_SNAPSHOT_KEYS = Object.freeze(['inputCase', 'manifest', 'repeat']);
 const DECISIONS = new Set(['allow', 'deny', 'review']);
 const RISKS = new Set(['low', 'medium', 'high', 'critical']);
 const AUTHORIZATIONS = new Set(['unknown', 'low', 'medium', 'high']);
@@ -138,6 +149,27 @@ function snapshotContext({ caseData, manifest, repeat }) {
     manifest_hash: manifestValue.manifest_hash,
     model: manifestValue.model_id,
     case_id: item.id,
+    repeat,
+    profile: manifestValue.profile.name,
+  };
+  return {
+    item,
+    manifest: manifestValue,
+    repeat,
+    resumeKey: makeResumeKey(tuple),
+  };
+}
+
+function snapshotInferenceContext({ inputCase, manifest, repeat }) {
+  if (!Number.isInteger(repeat) || repeat < 1 || repeat > 10) {
+    throw new TypeError('invalid inference attempt repeat');
+  }
+  const item = validateHoldoutInputCase(inputCase);
+  const manifestValue = snapshotManifest(manifest);
+  const tuple = {
+    manifest_hash: manifestValue.manifest_hash,
+    model: manifestValue.model_id,
+    case_id: item.evaluation_id,
     repeat,
     profile: manifestValue.profile.name,
   };
@@ -406,7 +438,42 @@ function buildAttempt(context, {
   });
 }
 
-function failureAttempt(context, {
+function buildInferenceAttempt(context, {
+  verdict = null,
+  normalizedKind,
+  autonomousOutcome,
+  supervisedOutcome,
+  schemaValid,
+  failureStage = null,
+  failureCode = null,
+  latencyMs = 0,
+  usage = null,
+}) {
+  const { item, manifest, repeat, resumeKey } = context;
+  return deepFreeze({
+    resume_key: resumeKey,
+    manifest_hash: manifest.manifest_hash,
+    model: manifest.model_id,
+    profile: manifest.profile.name,
+    evaluation_id: item.evaluation_id,
+    repeat,
+    raw_decision: verdict?.decision ?? null,
+    raw_risk: verdict?.risk ?? null,
+    raw_authorization: verdict?.authorization ?? null,
+    confidence: verdict?.confidence ?? null,
+    normalized_kind: normalizedKind,
+    autonomous_outcome: autonomousOutcome,
+    supervised_outcome: supervisedOutcome,
+    schema_valid: schemaValid,
+    failure_stage: failureStage,
+    failure_code: failureCode,
+    latency_ms: safeLatency(latencyMs),
+    usage,
+    rationale_sha256: verdict === null ? null : hashRationale(verdict.rationale),
+  });
+}
+
+function evaluationFailure({
   stage,
   code,
   latencyMs = 0,
@@ -414,7 +481,7 @@ function failureAttempt(context, {
   verdict = null,
   schemaValid = false,
 }) {
-  return buildAttempt(context, {
+  return {
     verdict,
     normalizedKind: 'failure',
     autonomousOutcome: 'blocked',
@@ -424,7 +491,76 @@ function failureAttempt(context, {
     failureCode: code,
     latencyMs,
     usage,
+  };
+}
+
+async function evaluateProductionContract({ reviewer, evaluation, timeoutMs }) {
+  const input = evaluation.reviewerInput;
+  const response = await callReviewer(reviewer, input, timeoutMs);
+  if (response === null) {
+    return evaluationFailure({ stage: 'reviewer', code: 'reviewer_failure' });
+  }
+  if (!response.ok) {
+    return evaluationFailure({
+      stage: 'transport',
+      code: failureCode(response.reason),
+      latencyMs: response.latencyMs,
+    });
+  }
+
+  const parsed = parseJudgeResponse(response.text, {
+    expectedHash: input.envelope.action_hash,
   });
+  if (!parsed.ok) {
+    return evaluationFailure({
+      stage: 'parser',
+      code: 'parser_failure',
+      latencyMs: response.latencyMs,
+      usage: response.usage,
+    });
+  }
+
+  try {
+    const normalized = applyLocalSafetyDowngrade(
+      applyOpaqueDowngrade(normalizeVerdict(parsed.verdict), input.envelope.params),
+      input.envelope.tool_name,
+      input.envelope.params,
+      evaluation.localAction,
+    );
+    if (normalized === null || typeof normalized !== 'object'
+      || !NORMALIZED_KINDS.has(normalized.kind) || normalized.kind === 'failure') {
+      throw new TypeError('normalizer failure');
+    }
+    const autonomous = mapVerdict({
+      mode: 'autonomous',
+      enforcement: 'enforce',
+      result: normalized,
+      params: input.envelope.params,
+    });
+    const outcomes = outcomesFor(normalized.kind, autonomous);
+    if ((normalized.kind === 'allow' && outcomes.autonomousOutcome !== 'executed_without_human')
+      || (normalized.kind !== 'allow' && outcomes.autonomousOutcome !== 'blocked')) {
+      throw new TypeError('mapping failure');
+    }
+    return {
+      verdict: parsed.verdict,
+      normalizedKind: normalized.kind,
+      autonomousOutcome: outcomes.autonomousOutcome,
+      supervisedOutcome: outcomes.supervisedOutcome,
+      schemaValid: true,
+      latencyMs: response.latencyMs,
+      usage: response.usage,
+    };
+  } catch {
+    return evaluationFailure({
+      stage: 'normalizer',
+      code: 'normalizer_failure',
+      latencyMs: response.latencyMs,
+      usage: response.usage,
+      verdict: parsed.verdict,
+      schemaValid: true,
+    });
+  }
 }
 
 function snapshotStringArray(value) {
@@ -513,9 +649,8 @@ function outcomeFieldsAreConsistent(fields) {
     && fields.supervised_outcome === 'sent_to_human';
 }
 
-function productionKindIsConsistent(fields, context) {
+function productionKindIsConsistent(fields, evaluation) {
   if (!fields.schema_valid || fields.failure_stage === 'normalizer') return true;
-  const evaluation = createCaseEvaluationContext(context.item);
   const input = evaluation.reviewerInput;
   const verdict = {
     policy_version: POLICY_VERSION,
@@ -565,7 +700,7 @@ export function snapshotCompletedAttempt(value, { caseData, manifest, repeat }) 
       || !usage.valid
       || !failureFieldsAreConsistent(fields)
       || !verdictFieldsAreConsistent(fields)
-      || !productionKindIsConsistent(fields, context)
+      || !productionKindIsConsistent(fields, createCaseEvaluationContext(context.item))
       || !outcomeFieldsAreConsistent(fields)) return null;
 
     if ((fields.failure_stage === 'reviewer' || fields.failure_stage === 'transport')
@@ -605,6 +740,71 @@ export function snapshotCompletedAttempt(value, { caseData, manifest, repeat }) 
   }
 }
 
+export function snapshotInferenceAttempt(value, options) {
+  try {
+    const contextFields = exactDataValues(
+      options,
+      INFERENCE_SNAPSHOT_KEYS,
+      'invalid inference snapshot options',
+    );
+    const context = snapshotInferenceContext({
+      inputCase: contextFields.inputCase,
+      manifest: contextFields.manifest,
+      repeat: contextFields.repeat,
+    });
+    const fields = exactDataValues(
+      value,
+      INFERENCE_ATTEMPT_KEYS,
+      'invalid completed inference attempt',
+    );
+    const usage = sanitizeUsage(fields.usage, { exact: true });
+    const evaluation = createInferenceEvaluationContext(context.item);
+    if (fields.resume_key !== context.resumeKey
+      || fields.manifest_hash !== context.manifest.manifest_hash
+      || fields.model !== context.manifest.model_id
+      || fields.profile !== context.manifest.profile.name
+      || fields.evaluation_id !== context.item.evaluation_id
+      || fields.repeat !== context.repeat
+      || !NORMALIZED_KINDS.has(fields.normalized_kind)
+      || typeof fields.schema_valid !== 'boolean'
+      || typeof fields.latency_ms !== 'number'
+      || !Number.isFinite(fields.latency_ms)
+      || fields.latency_ms < 0
+      || !usage.valid
+      || !failureFieldsAreConsistent(fields)
+      || !verdictFieldsAreConsistent(fields)
+      || !productionKindIsConsistent(fields, evaluation)
+      || !outcomeFieldsAreConsistent(fields)) return null;
+
+    if ((fields.failure_stage === 'reviewer' || fields.failure_stage === 'transport')
+      && usage.value !== null) return null;
+
+    return deepFreeze({
+      resume_key: fields.resume_key,
+      manifest_hash: fields.manifest_hash,
+      model: fields.model,
+      profile: fields.profile,
+      evaluation_id: fields.evaluation_id,
+      repeat: fields.repeat,
+      raw_decision: fields.raw_decision,
+      raw_risk: fields.raw_risk,
+      raw_authorization: fields.raw_authorization,
+      confidence: fields.confidence,
+      normalized_kind: fields.normalized_kind,
+      autonomous_outcome: fields.autonomous_outcome,
+      supervised_outcome: fields.supervised_outcome,
+      schema_valid: fields.schema_valid,
+      failure_stage: fields.failure_stage,
+      failure_code: fields.failure_code,
+      latency_ms: fields.latency_ms,
+      usage: usage.value,
+      rationale_sha256: fields.rationale_sha256,
+    });
+  } catch {
+    return null;
+  }
+}
+
 export async function evaluateAttempt(options) {
   const fields = exactDataValues(options, OPTION_KEYS, 'invalid attempt options');
   const context = snapshotContext({
@@ -613,74 +813,30 @@ export async function evaluateAttempt(options) {
     repeat: fields.repeat,
   });
   const evaluation = createCaseEvaluationContext(context.item);
-  const input = evaluation.reviewerInput;
-  const response = await callReviewer(
-    fields.reviewer,
-    input,
-    context.manifest.profile.timeout_ms,
-  );
-  if (response === null) {
-    return failureAttempt(context, { stage: 'reviewer', code: 'reviewer_failure' });
-  }
-  if (!response.ok) {
-    return failureAttempt(context, {
-      stage: 'transport',
-      code: failureCode(response.reason),
-      latencyMs: response.latencyMs,
-    });
-  }
-
-  const parsed = parseJudgeResponse(response.text, {
-    expectedHash: input.envelope.action_hash,
+  const result = await evaluateProductionContract({
+    reviewer: fields.reviewer,
+    evaluation,
+    timeoutMs: context.manifest.profile.timeout_ms,
   });
-  if (!parsed.ok) {
-    return failureAttempt(context, {
-      stage: 'parser',
-      code: 'parser_failure',
-      latencyMs: response.latencyMs,
-      usage: response.usage,
-    });
-  }
+  return buildAttempt(context, result);
+}
 
-  try {
-    const normalized = applyLocalSafetyDowngrade(
-      applyOpaqueDowngrade(normalizeVerdict(parsed.verdict), input.envelope.params),
-      input.envelope.tool_name,
-      input.envelope.params,
-      evaluation.localAction,
-    );
-    if (normalized === null || typeof normalized !== 'object'
-      || !NORMALIZED_KINDS.has(normalized.kind) || normalized.kind === 'failure') {
-      throw new TypeError('normalizer failure');
-    }
-    const autonomous = mapVerdict({
-      mode: 'autonomous',
-      enforcement: 'enforce',
-      result: normalized,
-      params: input.envelope.params,
-    });
-    const outcomes = outcomesFor(normalized.kind, autonomous);
-    if ((normalized.kind === 'allow' && outcomes.autonomousOutcome !== 'executed_without_human')
-      || (normalized.kind !== 'allow' && outcomes.autonomousOutcome !== 'blocked')) {
-      throw new TypeError('mapping failure');
-    }
-    return buildAttempt(context, {
-      verdict: parsed.verdict,
-      normalizedKind: normalized.kind,
-      autonomousOutcome: outcomes.autonomousOutcome,
-      supervisedOutcome: outcomes.supervisedOutcome,
-      schemaValid: true,
-      latencyMs: response.latencyMs,
-      usage: response.usage,
-    });
-  } catch {
-    return failureAttempt(context, {
-      stage: 'normalizer',
-      code: 'normalizer_failure',
-      latencyMs: response.latencyMs,
-      usage: response.usage,
-      verdict: parsed.verdict,
-      schemaValid: true,
-    });
-  }
+export async function evaluateInferenceAttempt(options) {
+  const fields = exactDataValues(
+    options,
+    INFERENCE_OPTION_KEYS,
+    'invalid inference attempt options',
+  );
+  const context = snapshotInferenceContext({
+    inputCase: fields.inputCase,
+    manifest: fields.manifest,
+    repeat: fields.repeat,
+  });
+  const evaluation = createInferenceEvaluationContext(context.item);
+  const result = await evaluateProductionContract({
+    reviewer: fields.reviewer,
+    evaluation,
+    timeoutMs: context.manifest.profile.timeout_ms,
+  });
+  return buildInferenceAttempt(context, result);
 }

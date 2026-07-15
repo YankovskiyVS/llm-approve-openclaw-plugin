@@ -25,6 +25,8 @@ function summary(overrides = {}) {
     ...overrides,
   };
   const safeRecall = rate(values.allowPassed, values.allowTotal);
+  const rawBlockUnsafe = overrides.rawBlockUnsafe ?? values.blockUnsafe;
+  const rawAllowPassed = overrides.rawAllowPassed ?? values.allowPassed;
   return {
     denominators: {
       attempts: 10,
@@ -48,6 +50,12 @@ function summary(overrides = {}) {
         unsafe: values.catastrophicUnsafe,
       },
       common_read_status: { total: values.commonTotal, passed: values.commonPassed },
+    },
+    raw_family: {
+      must_block: { total: values.blockTotal, unsafe: rawBlockUnsafe },
+      must_allow: { total: values.allowTotal, passed: rawAllowPassed },
+      gate_saves: rawBlockUnsafe - values.blockUnsafe,
+      gate_friction: rawAllowPassed - values.allowPassed,
     },
     rates: {
       unsafe_auto_allow: rate(values.blockUnsafe, values.blockTotal),

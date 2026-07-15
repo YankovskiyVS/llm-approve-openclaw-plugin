@@ -3,6 +3,7 @@ import { createAction, createJudgeEnvelope } from './action.js';
 import { buildAuditEvent, createAuditWriter } from './audit.js';
 import {
   APPROVAL_TIMEOUT_MS,
+  isTrustedUserRequest,
   MIN_CONFIDENCE,
   PLUGIN_ID,
 } from './constants.js';
@@ -27,7 +28,6 @@ const PLUGIN_DESCRIPTION = 'LLM-gated tool-call approval for OpenClaw';
 const HOOK_PRIORITY = -1000;
 const STORE_TTL_MS = 30 * 60 * 1000;
 const STORE_MAX_ENTRIES = 1000;
-const MAX_PROMPT_BYTES = 64 * 1024;
 const SETUP_FAILED_MESSAGE = 'LLM action judge setup failed';
 const REGISTERED_MESSAGE = 'LLM action judge registered';
 const FAILURE_REASON = 'judge evaluation failed';
@@ -101,14 +101,6 @@ function dependencyValue(deps, key, fallback) {
 
 function isNonBlankString(value) {
   return typeof value === 'string' && value.trim() !== '';
-}
-
-function promptIsTrusted(value) {
-  try {
-    return isNonBlankString(value) && Buffer.byteLength(value, 'utf8') <= MAX_PROMPT_BYTES;
-  } catch {
-    return false;
-  }
 }
 
 function consistentValue(event, ctx, key, required) {
@@ -405,7 +397,7 @@ export function createActionJudgePlugin(deps = {}) {
       try {
         const prompt = readData(event, 'prompt');
         const runId = readData(ctx, 'runId');
-        if (!prompt.ok || !runId.ok || !promptIsTrusted(prompt.value)
+        if (!prompt.ok || !runId.ok || !isTrustedUserRequest(prompt.value)
           || !isNonBlankString(runId.value)) return;
         const put = methodValue(store, 'put');
         if (!put) return;
@@ -440,7 +432,7 @@ export function createActionJudgePlugin(deps = {}) {
         if (identity.ok && actionMatchesIdentity(action, identity)
           && envelope !== undefined && typeof expectedHash === 'string') {
           const userPrompt = getStoredPrompt(store, identity.runId);
-          if (promptIsTrusted(userPrompt)) {
+          if (isTrustedUserRequest(userPrompt)) {
             const review = methodValue(client, 'review');
             if (review) {
               const reviewed = await Promise.resolve().then(() => review.call(client, {

@@ -9,3 +9,14 @@ export const JUDGE_TIMEOUT_MS = 8_000;
 export const MIN_JUDGE_TIMEOUT_MS = 1_000;
 export const MAX_JUDGE_TIMEOUT_MS = 30_000;
 export const APPROVAL_TIMEOUT_MS = 60_000;
+export const MAX_TRUSTED_PROMPT_BYTES = 64 * 1024;
+
+export function isTrustedUserRequest(value) {
+  try {
+    return typeof value === 'string'
+      && value.trim() !== ''
+      && Buffer.byteLength(value, 'utf8') <= MAX_TRUSTED_PROMPT_BYTES;
+  } catch {
+    return false;
+  }
+}

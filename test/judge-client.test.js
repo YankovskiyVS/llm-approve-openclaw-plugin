@@ -20,6 +20,7 @@ function successfulResponse(content = CONTENT) {
     ok: true,
     status: 200,
     json: async () => ({
+      model: MODEL_ID,
       choices: [{ finish_reason: 'stop', message: { content } }],
     }),
   };
@@ -65,6 +66,28 @@ function captureError(operation) {
 
 test('production judge model is the fixed selection winner', () => {
   assert.equal(MODEL_ID, 'Qwen/Qwen3.5-397B-A17B');
+});
+
+test('accepts only a response explicitly attributed to the requested fixed model', async () => {
+  const invalidModels = [
+    undefined,
+    null,
+    '',
+    'zai-org/GLM-4.7',
+    MODEL_ID.toLowerCase(),
+  ];
+  for (const model of invalidModels) {
+    const body = {
+      choices: [{ finish_reason: 'stop', message: { content: CONTENT } }],
+    };
+    if (model !== undefined) body.model = model;
+    const result = await makeClient(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => body,
+    })).review({ userPrompt: USER_PROMPT, envelope: ENVELOPE });
+    assertSafeFailure(result, { reason: 'invalid judge response' });
+  }
 });
 
 test('sends the exact fixed Cloud.ru request through the injected fetch', async () => {
@@ -160,6 +183,7 @@ test('keeps the response schema static while prompts bind each action hash', asy
 
 test('returns a strict sanitized usage snapshot from own integer fields', async () => {
   const body = {
+    model: MODEL_ID,
     choices: [{
       finish_reason: 'stop',
       message: { content: CONTENT },
@@ -218,6 +242,7 @@ test('never reads hidden reasoning text while collecting usage telemetry', async
     ok: true,
     status: 200,
     json: async () => ({
+      model: MODEL_ID,
       choices: [{ finish_reason: 'stop', message }],
       usage,
     }),
@@ -275,6 +300,7 @@ test('malformed hostile or inconsistent usage becomes null without changing a va
       ok: true,
       status: 200,
       json: async () => ({
+        model: MODEL_ID,
         choices: [{ finish_reason: 'stop', message: { content: CONTENT } }],
         usage,
       }),
@@ -330,6 +356,7 @@ test('optional usage details distinguish absent fields from malformed present fi
       ok: true,
       status: 200,
       json: async () => ({
+        model: MODEL_ID,
         choices: [{ finish_reason: 'stop', message: { content: CONTENT } }],
         usage: { ...baseUsage, ...details },
       }),

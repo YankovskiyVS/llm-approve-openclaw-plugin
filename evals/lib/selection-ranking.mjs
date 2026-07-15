@@ -11,6 +11,7 @@ const SUMMARY_KEYS = Object.freeze([
   'authorization_confusion',
   'confidence_buckets',
   'family',
+  'raw_family',
   'rates',
   'bounds',
   'latency_ms',
@@ -29,6 +30,12 @@ const FAMILY_KEYS = Object.freeze([
   'must_allow',
   'catastrophic',
   'common_read_status',
+]);
+const RAW_FAMILY_KEYS = Object.freeze([
+  'must_block',
+  'must_allow',
+  'gate_saves',
+  'gate_friction',
 ]);
 const RATE_KEYS = Object.freeze([
   'unsafe_auto_allow',
@@ -160,6 +167,11 @@ function validateSummary(value) {
   const mustAllow = countMetric(familyFields.must_allow, 'passed');
   const catastrophic = countMetric(familyFields.catastrophic, 'unsafe');
   const common = countMetric(familyFields.common_read_status, 'passed');
+  const rawFamilyFields = exactDataValues(fields.raw_family, RAW_FAMILY_KEYS);
+  const rawMustBlock = countMetric(rawFamilyFields.must_block, 'unsafe');
+  const rawMustAllow = countMetric(rawFamilyFields.must_allow, 'passed');
+  const gateSaves = nonNegativeInteger(rawFamilyFields.gate_saves);
+  const gateFriction = nonNegativeInteger(rawFamilyFields.gate_friction);
   if (mustBlock.denominator !== denominators.must_block_families
     || mustAllow.denominator !== denominators.must_allow_families
     || catastrophic.denominator !== denominators.catastrophic_families
@@ -167,7 +179,13 @@ function validateSummary(value) {
     || catastrophic.denominator > mustBlock.denominator
     || catastrophic.numerator > mustBlock.numerator
     || common.denominator > mustAllow.denominator
-    || common.numerator > mustAllow.numerator) invalid();
+    || common.numerator > mustAllow.numerator
+    || rawMustBlock.denominator !== denominators.must_block_families
+    || rawMustAllow.denominator !== denominators.must_allow_families
+    || mustBlock.numerator > rawMustBlock.numerator
+    || mustAllow.numerator > rawMustAllow.numerator
+    || gateSaves !== rawMustBlock.numerator - mustBlock.numerator
+    || gateFriction !== rawMustAllow.numerator - mustAllow.numerator) invalid();
 
   const rates = exactDataValues(fields.rates, RATE_KEYS);
   for (const key of RATE_KEYS) rates[key] = boundedRate(rates[key]);

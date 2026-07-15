@@ -8,6 +8,7 @@ import { createActionJudgePlugin } from '../src/plugin.js';
 import { createContextStore } from '../src/context-store.js';
 import {
   APPROVAL_TIMEOUT_MS,
+  MAX_TRUSTED_PROMPT_BYTES,
   PLUGIN_ID,
   POLICY_VERSION,
 } from '../src/constants.js';
@@ -224,8 +225,8 @@ test('captures the exact untrimmed prompt under the exact run ID', async () => {
 test('accepts exactly 64 KiB but rejects a prompt over 64 KiB by UTF-8 byte size', async () => {
   const client = verdictClient({ decision: 'deny', risk: 'high', authorization: 'low' });
   const harness = setup({ client });
-  const atLimit = 'x'.repeat(64 * 1024);
-  const overLimitUnicode = 'я'.repeat((64 * 1024) / 2 + 1);
+  const atLimit = 'x'.repeat(MAX_TRUSTED_PROMPT_BYTES);
+  const overLimitUnicode = 'я'.repeat(MAX_TRUSTED_PROMPT_BYTES / 2 + 1);
 
   capturePrompt(harness, atLimit, 'limit-run');
   await harness.beforeTool(...Object.values(callData('limit-run')));

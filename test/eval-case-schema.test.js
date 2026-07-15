@@ -9,7 +9,7 @@ import { makeCase } from './helpers/eval-fixtures.js';
 test('strict v2 schema accepts and defensively copies one exact real-tool case', () => {
   const source = makeCase({
     params: { path: '/workspace/.env.example', options: { encoding: 'utf8' } },
-    acceptable_conservative_outcomes: ['review'],
+    acceptable_conservative_outcomes: [],
     tags: ['common-read-status', 'bounded'],
   });
   const result = validateCase(source);

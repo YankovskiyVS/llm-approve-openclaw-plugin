@@ -13,6 +13,7 @@ const RELEASE_PACKAGE_FILES = Object.freeze([
   'CHANGELOG.md',
   'CONTRACT.md',
   'DEPLOYMENT.md',
+  'HOLDOUT.md',
   'LICENSE',
   'README.md',
   'RND.md',
@@ -63,6 +64,15 @@ async function pathExists(target) {
 
 async function requireFreshOutput(outputDir) {
   if (await pathExists(outputDir)) throw new Error('release output already exists');
+}
+
+async function canonicalReleaseParent(parent) {
+  const canonical = await fs.realpath(parent);
+  const stat = await fs.lstat(canonical);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error('invalid release output parent');
+  }
+  return canonical;
 }
 
 function expectedTarballName(metadata) {
@@ -181,11 +191,14 @@ async function packToStaging(packageRoot, stagingRoot, expectedFilename) {
 
 export async function buildRelease({ packageRoot = DEFAULT_PACKAGE_ROOT, outputDir } = {}) {
   const root = requiredPath(packageRoot, 'packageRoot');
-  const output = requiredPath(outputDir, 'outputDir');
-  await requireFreshOutput(output);
+  const requestedOutput = requiredPath(outputDir, 'outputDir');
+  await requireFreshOutput(requestedOutput);
 
-  const parent = path.dirname(output);
-  await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+  const requestedParent = path.dirname(requestedOutput);
+  await fs.mkdir(requestedParent, { recursive: true, mode: 0o700 });
+  const parent = await canonicalReleaseParent(requestedParent);
+  const output = path.join(parent, path.basename(requestedOutput));
+  await requireFreshOutput(output);
   const lockPath = `${output}.lock`;
   let lock;
   try {
@@ -196,6 +209,9 @@ export async function buildRelease({ packageRoot = DEFAULT_PACKAGE_ROOT, outputD
   }
 
   let stagingRoot;
+  let outputReserved = false;
+  let publicationComplete = false;
+  const publishedNames = [];
   try {
     await requireFreshOutput(output);
     await validateReleaseSources(root);
@@ -221,16 +237,32 @@ export async function buildRelease({ packageRoot = DEFAULT_PACKAGE_ROOT, outputD
     });
     await fs.chmod(stagedTarball, 0o644);
 
-    await requireFreshOutput(output);
-    await fs.rename(publishDir, output);
+    try {
+      await fs.mkdir(output, { mode: 0o700 });
+      outputReserved = true;
+    } catch (error) {
+      if (error?.code === 'EEXIST') throw new Error('release output already exists');
+      throw error;
+    }
+    for (const name of [tarballName, checksumName]) {
+      await fs.link(path.join(publishDir, name), path.join(output, name));
+      publishedNames.push(name);
+    }
+    publicationComplete = true;
     return {
-      outputDir: output,
-      tarballPath: path.join(output, tarballName),
-      checksumPath: path.join(output, checksumName),
+      outputDir: requestedOutput,
+      tarballPath: path.join(requestedOutput, tarballName),
+      checksumPath: path.join(requestedOutput, checksumName),
       sha256,
       files: RELEASE_PACKAGE_FILES.slice(),
     };
   } finally {
+    if (outputReserved && !publicationComplete) {
+      for (const name of publishedNames) {
+        await fs.rm(path.join(output, name), { force: true }).catch(() => {});
+      }
+      await fs.rmdir(output).catch(() => {});
+    }
     await lock.close().catch(() => {});
     await fs.rm(lockPath, { force: true });
     if (stagingRoot !== undefined) await fs.rm(stagingRoot, { recursive: true, force: true });

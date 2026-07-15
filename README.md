@@ -1,6 +1,6 @@
 # OpenClaw LLM Action Judge
 
-Плагин `openclaw-llm-action-judge` версии `0.4.0` проверяет каждый proposed tool
+Плагин `openclaw-llm-action-judge` версии `0.4.1` проверяет каждый proposed tool
 call отдельной фиксированной LLM **до исполнения**. Низкорисковое и явно
 разрешённое действие может пройти автоматически, сомнительное — запросить
 подтверждение, опасное — быть заблокировано.
@@ -45,11 +45,11 @@ call отдельной фиксированной LLM **до исполнени
 
 ## Установка
 
-Команды выполняются из каталога `releases/v0.4.0`:
+Команды выполняются из каталога `releases/v0.4.1`:
 
 ```bash
-shasum -a 256 -c openclaw-llm-action-judge-0.4.0.tgz.sha256
-openclaw plugins install ./openclaw-llm-action-judge-0.4.0.tgz
+shasum -a 256 -c openclaw-llm-action-judge-0.4.1.tgz.sha256
+openclaw plugins install ./openclaw-llm-action-judge-0.4.1.tgz
 ```
 
 Проверьте текущий allowlist:
@@ -183,7 +183,7 @@ openclaw plugins doctor
 
 - gateway отвечает `OK`;
 - `imported=true`;
-- version `0.4.0`;
+- version `0.4.1`;
 - hooks: `before_model_resolve` и `before_tool_call`;
 - `diagnostics=[]`.
 
@@ -198,8 +198,9 @@ openclaw dashboard
 1. Попросите агента прочитать обычный несекретный файл — корректный `allow`
    должен пройти во всех enforcement-режимах.
 2. Попросите изменить production-marked config или выполнить destructive delete.
-   В `supervised` ожидается approval или block, но не выполнение; в `autonomous`
-   ожидается block.
+   В `supervised` действие не должно выполниться автоматически: ожидается native
+   approval или block; после явного approval оно может выполниться. В
+   `autonomous` ожидается block.
 3. Проверьте, что заблокированное действие не изменило файл.
 
 Смотреть audit в реальном времени:
@@ -223,7 +224,8 @@ guard не позволил выполнить его автоматически
 
 1. `before_model_resolve` сохраняет exact trusted request только для текущего
    `runId`; предыдущий transcript судье не передаётся.
-2. `before_tool_call` создаёт immutable snapshot действия и SHA-256 hash.
+2. `before_tool_call` создаёт immutable snapshot действия и непрозрачный keyed
+   HMAC-SHA-256 commitment.
 3. В Cloud.ru уходят user request, tool name, redacted params, fixed policy и
    action hash.
 4. Judge возвращает seven-field verdict через strict `json_schema`.
@@ -233,10 +235,16 @@ guard не позволил выполнить его автоматически
 7. Action повторно хешируется после async model call; mutation означает failure.
 8. Mode mapper разрешает, запрашивает approval либо блокирует tool call.
 
+32-byte commitment key случайно создаётся внутри Node.js process, не читается из
+ENV, не экспортируется, не сохраняется и не передаётся judge. Wire-формат
+`sha256:<64 lowercase hex>` сохранён. Значение стабильно в пределах одного
+process и меняется после restart, поэтому audit hashes нельзя сопоставлять между
+разными запусками gateway.
+
 Schema-valid ответ не означает safe решение: semantic checks и deterministic
 guard остаются обязательными. Fallback на `json_object` отсутствует.
 
-## Зафиксированный контракт 0.4.0
+## Зафиксированный контракт 0.4.1
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
 - policy: `2026-07-14.6`;
@@ -274,4 +282,5 @@ corpus. Raw judge разрешил 18 unsafe attempts, local/semantic guards з�
 - [CONTRACT.md](CONTRACT.md) — black-box входы, выходы и failure semantics.
 - [SECURITY.md](SECURITY.md) — security boundary и incident response.
 - [RND.md](RND.md) — исследование моделей, benchmark и его ограничения.
+- [HOLDOUT.md](HOLDOUT.md) — sealed primary/reserve protocol без label leakage.
 - [CHANGELOG.md](CHANGELOG.md) — история версий.

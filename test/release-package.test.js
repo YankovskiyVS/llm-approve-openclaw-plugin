@@ -20,6 +20,7 @@ const EXPECTED_FILES_FIELD = [
   'CONTRACT.md',
   'DEPLOYMENT.md',
   'RND.md',
+  'HOLDOUT.md',
   'CHANGELOG.md',
   'SECURITY.md',
   'LICENSE',
@@ -29,6 +30,7 @@ const EXPECTED_PACKAGE_FILES = [
   'CHANGELOG.md',
   'CONTRACT.md',
   'DEPLOYMENT.md',
+  'HOLDOUT.md',
   'LICENSE',
   'README.md',
   'RND.md',
@@ -86,10 +88,10 @@ async function tarEntries(tarballPath) {
   return stdout.trim().split('\n').filter(Boolean);
 }
 
-test('package metadata pins the internal 0.4.0 release contract and lean runtime dependencies', async () => {
+test('package metadata pins the internal 0.4.1 release contract and lean runtime dependencies', async () => {
   const metadata = JSON.parse(await fs.readFile(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'));
 
-  assert.equal(metadata.version, '0.4.0');
+  assert.equal(metadata.version, '0.4.1');
   assert.equal(metadata.private, true);
   assert.equal(metadata.license, 'UNLICENSED');
   assert.deepEqual(metadata.repository, {
@@ -110,7 +112,7 @@ test('package metadata pins the internal 0.4.0 release contract and lean runtime
 test('npm pack dry-run has the exact reviewed release file set', async () => {
   const packed = await npmPackDryRun();
 
-  assert.equal(packed.filename, 'openclaw-llm-action-judge-0.4.0.tgz');
+  assert.equal(packed.filename, 'openclaw-llm-action-judge-0.4.1.tgz');
   assert.deepEqual(packed.files.map((entry) => entry.path).sort(), EXPECTED_PACKAGE_FILES);
   assert.equal(packed.files.some((entry) => /(?:^|\/)(?:evals?|tests?|reviews?)(?:\/|$)/u.test(entry.path)), false);
   assert.equal(packed.files.some((entry) => path.isAbsolute(entry.path) || entry.path.split('/').includes('..')), false);
@@ -122,7 +124,7 @@ test('release builder publishes one versioned tarball and matching sha256 into a
   const outputDir = path.join(temporary, 'release');
 
   const result = await buildRelease({ packageRoot: PACKAGE_ROOT, outputDir });
-  const tarballName = 'openclaw-llm-action-judge-0.4.0.tgz';
+  const tarballName = 'openclaw-llm-action-judge-0.4.1.tgz';
   const checksumName = `${tarballName}.sha256`;
   const tarballPath = path.join(outputDir, tarballName);
   const checksumPath = path.join(outputDir, checksumName);
@@ -153,7 +155,7 @@ test('release builder publishes one versioned tarball and matching sha256 into a
     await fs.readFile(path.join(extracted, 'package', 'package.json'), 'utf8'),
   );
   assert.equal(Object.hasOwn(runtimeMetadata, 'scripts'), false);
-  assert.equal(runtimeMetadata.version, '0.4.0');
+  assert.equal(runtimeMetadata.version, '0.4.1');
   assert.deepEqual(runtimeMetadata.dependencies, { ajv: '8.20.0' });
   assert.deepEqual(runtimeMetadata.peerDependenciesMeta, { openclaw: { optional: true } });
   const [sourceSchema, packagedSchema] = await Promise.all([
@@ -213,7 +215,7 @@ test('runtime smoke pins v0.4 and fails closed for schema-invalid judge output',
 
   assert.deepEqual(JSON.parse(stdout), {
     schemaVersion: 2,
-    packageVersion: '0.4.0',
+    packageVersion: '0.4.1',
     hooks: ['before_model_resolve', 'before_tool_call'],
     safeAllow: true,
     deterministicGuardBlock: true,
@@ -227,7 +229,7 @@ test('runtime smoke pins v0.4 and fails closed for schema-invalid judge output',
   });
 });
 
-test('release docs state the v0.4 structured-output contract and historical evidence boundary', async () => {
+test('release docs state the v0.4.1 structured-output contract and historical evidence boundary', async () => {
   const [readme, contract, security, deployment, rnd, changelog] = await Promise.all([
     fs.readFile(path.join(PACKAGE_ROOT, 'README.md'), 'utf8'),
     fs.readFile(path.join(PACKAGE_ROOT, 'CONTRACT.md'), 'utf8'),
@@ -238,7 +240,7 @@ test('release docs state the v0.4 structured-output contract and historical evid
   ]);
 
   for (const document of [readme, contract, security, deployment, rnd, changelog]) {
-    assert.match(document, /0\.4\.0/u);
+    assert.match(document, /0\.4\.1/u);
   }
   for (const document of [readme, contract, security, rnd, changelog]) {
     assert.match(document, /2026-07-14\.6/u);
@@ -250,8 +252,8 @@ test('release docs state the v0.4 structured-output contract and historical evid
   assert.match(readme, /schema-valid[^\n]*не означает safe/iu);
   assert.match(contract, /schemas\/judge-verdict\.schema\.json/u);
   assert.match(security, /fallback[^\n]*json_object[^\n]*отсутств/iu);
-  assert.match(deployment, /releases\/v0\.4\.0/u);
-  assert.match(deployment, /0\.4\.0[^\n]*0\.3\.0/u);
+  assert.match(deployment, /releases\/v0\.4\.1/u);
+  assert.match(deployment, /0\.4\.1[^\n]*0\.4\.0/u);
   assert.match(rnd, /Successful sixth strict qualification/iu);
   assert.match(rnd, /2026-07-14\.1[\s\S]*release-blocker/iu);
   assert.match(rnd, /112\/120[\s\S]*9\/240[\s\S]*5\/80[\s\S]*0\/11/iu);
@@ -277,6 +279,7 @@ test('release docs state the v0.4 structured-output contract and historical evid
   assert.match(rnd, /fail-open[\s\S]*default-allow/iu);
   assert.match(rnd, /historical\s+baseline 0\.2\.0\/0\.3\.0/iu);
   assert.match(changelog, /## 0\.4\.0 — 2026-07-14/u);
+  assert.match(changelog, /## 0\.4\.1 — 2026-07-15/u);
 });
 
 test('deployment docs distinguish managed service ENV and safe legacy rollback', async () => {
@@ -359,7 +362,7 @@ test('README is operational-first for supervised and autonomous startup', async 
   );
   assert.match(
     readme,
-    /В `supervised` ожидается approval или block, но не выполнение/iu,
+    /В `supervised` действие не должно выполниться автоматически[\s\S]*после явного approval оно может выполниться/iu,
   );
 });
 
@@ -377,6 +380,25 @@ test('release builder refuses to replace a pre-existing output directory', async
   );
   assert.equal(await fs.readFile(sentinel, 'utf8'), 'keep');
   assert.deepEqual(await fs.readdir(outputDir), ['keep.txt']);
+});
+
+test('concurrent release builds publish once without replacing the winner', async (t) => {
+  const { buildRelease } = await import('../scripts/build-release.mjs');
+  const temporary = await tempDirectory(t);
+  const outputDir = path.join(temporary, 'release');
+
+  const results = await Promise.allSettled([
+    buildRelease({ packageRoot: PACKAGE_ROOT, outputDir }),
+    buildRelease({ packageRoot: PACKAGE_ROOT, outputDir }),
+  ]);
+
+  assert.equal(results.filter(({ status }) => status === 'fulfilled').length, 1);
+  assert.equal(results.filter(({ status }) => status === 'rejected').length, 1);
+  const entries = await fs.readdir(outputDir);
+  assert.deepEqual(entries.sort(), [
+    'openclaw-llm-action-judge-0.4.1.tgz',
+    'openclaw-llm-action-judge-0.4.1.tgz.sha256',
+  ].sort());
 });
 
 test('source-only release builder CLI requires one explicit fresh output directory', async () => {

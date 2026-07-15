@@ -400,6 +400,46 @@ test('artifact builder accepts only the three repeats encoded by reproduce.sh', 
   }
 });
 
+test('artifact builder can bind an explicit holdout repeat count and reproduce script', async (t) => {
+  const holdoutReproduce = [
+    '#!/bin/sh',
+    'set -eu',
+    'if [ "$#" -ne 11 ]; then',
+    '  echo "usage: $0 INPUT ORACLE FREEZE_COMMITMENT FREEZE_SHA256 FREEZE_RECEIPT RECEIPT_SHA256 INFERENCE INFERENCE_SHA256 PRICING SCORER_GIT_SHA OUTPUT" >&2',
+    '  exit 64',
+    'fi',
+    'exec node ./evals/holdout-score.mjs --input "$1" --oracle "$2" --freeze-commitment "$3" --freeze-commitment-sha256 "$4" --freeze-receipt "$5" --freeze-receipt-sha256 "$6" --inference "$7" --inference-artifact-sha256 "$8" --pricing "$9" --scorer-git-sha "${10}" --output "${11}"',
+    '',
+  ].join('\n');
+
+  for (const repeats of [1, 2, 4, 10]) {
+    await t.test(`${repeats} complete repeats`, async () => {
+      const files = buildArtifactFiles(await artifactInput(repeats), {
+        expectedRepeats: repeats,
+        reproduceScript: holdoutReproduce,
+      });
+      assert.equal(files.get('reproduce.sh'), holdoutReproduce);
+      assert.equal(
+        files.get('attempts.jsonl').trimEnd().split('\n').length,
+        repeats * 2,
+      );
+    });
+  }
+
+  const input = await artifactInput();
+  for (const options of [
+    { expectedRepeats: 0, reproduceScript: holdoutReproduce },
+    { expectedRepeats: 11, reproduceScript: holdoutReproduce },
+    { expectedRepeats: 3, reproduceScript: 'not a strict shell script\n' },
+    { expectedRepeats: 3, reproduceScript: holdoutReproduce, extra: true },
+  ]) {
+    assert.throws(
+      () => buildArtifactFiles(input, options),
+      (error) => error instanceof TypeError && error.message === 'invalid artifact input',
+    );
+  }
+});
+
 test('CSV and XML renderers use RFC4180 quoting and XML entity escaping', () => {
   const csv = renderCasesCsv([{
     case_id: 'case,"quoted"\nline',
@@ -482,6 +522,10 @@ test('ranking and report render the common read status family metric and bound',
   assert.match(report, /Common read\/status passed: 0\/1/u);
   assert.match(report, /Common read\/status recall: 0/u);
   assert.match(report, /Common read\/status recall lower 95%: 0/u);
+  assert.match(report, /Raw judge MUST_ALLOW passed:/u);
+  assert.match(report, /Raw judge MUST_BLOCK unsafe:/u);
+  assert.match(report, /Guard saves:/u);
+  assert.match(report, /Guard friction:/u);
 });
 
 test('JUnit rejects invalid XML 1.0 characters', async (t) => {
@@ -576,6 +620,23 @@ test('publication writes exactly nine durable private files on real tempfs', asy
     );
   }
   assert.deepEqual(bufferEntries(files), before, 'publisher mutated caller map or content');
+});
+
+test('concurrent publishers never replace a reserved output directory', async (t) => {
+  const files = buildArtifactFiles(await artifactInput());
+  const parent = await tempParent(t);
+  const outputDir = join(parent, 'concurrent-run');
+
+  const results = await Promise.allSettled([
+    publishArtifacts({ outputDir, files, forbiddenValues: [SECRET] }),
+    publishArtifacts({ outputDir, files, forbiddenValues: [SECRET] }),
+  ]);
+
+  assert.equal(results.filter(({ status }) => status === 'fulfilled').length, 1);
+  const rejected = results.find(({ status }) => status === 'rejected');
+  assert.equal(rejected.reason instanceof TypeError, true);
+  assert.equal(rejected.reason.message, 'artifact output already exists');
+  assert.deepEqual((await readdir(outputDir)).sort(), EXPECTED_NAMES);
 });
 
 test('publisher snapshots mutable Map and Buffer inputs before its first filesystem await', async (t) => {

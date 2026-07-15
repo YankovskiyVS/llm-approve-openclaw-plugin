@@ -1,6 +1,6 @@
 {
   "name": "openclaw-llm-action-judge",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "LLM-gated tool-call approval for OpenClaw",
   "license": "UNLICENSED",
@@ -20,6 +20,7 @@
     "CONTRACT.md",
     "DEPLOYMENT.md",
     "RND.md",
+    "HOLDOUT.md",
     "CHANGELOG.md",
     "SECURITY.md",
     "LICENSE"
@@ -28,6 +29,10 @@
     "eval:harness": "node evals/benchmark.mjs",
     "eval:preflight": "node evals/candidate-preflight.mjs",
     "eval:selection": "node evals/candidate-selection.mjs",
+    "eval:holdout:freeze": "node evals/holdout-freeze.mjs",
+    "eval:holdout:audit": "node evals/holdout-partition-audit.mjs",
+    "eval:holdout:infer": "node evals/holdout-infer.mjs",
+    "eval:holdout:score": "node evals/holdout-score.mjs",
     "eval:smoke": "node evals/dev-smoke.mjs",
     "test": "node --test"
   },

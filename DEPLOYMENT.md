@@ -16,10 +16,10 @@
 
 ## 1. Verify artifact
 
-Из каталога `releases/v0.4.0`:
+Из каталога `releases/v0.4.1`:
 
 ```bash
-shasum -a 256 -c openclaw-llm-action-judge-0.4.0.tgz.sha256
+shasum -a 256 -c openclaw-llm-action-judge-0.4.1.tgz.sha256
 ```
 
 Ожидается `OK`. Не устанавливайте artifact с несовпавшим checksum.
@@ -70,7 +70,7 @@ platform config management. Не заменяйте рабочий список 
 следующая команда:
 
 ```bash
-openclaw plugins install ./openclaw-llm-action-judge-0.4.0.tgz
+openclaw plugins install ./openclaw-llm-action-judge-0.4.1.tgz
 openclaw config set plugins.allow '["llm-action-judge"]' --strict-json
 openclaw config set plugins.entries.llm-action-judge.hooks.allowConversationAccess true --strict-json
 openclaw plugins registry --refresh
@@ -95,7 +95,7 @@ openclaw plugins doctor
 Runtime inspect обязан показать:
 
 - `imported=true`;
-- version `0.4.0`;
+- version `0.4.1`;
 - ровно `before_model_resolve` и `before_tool_call`;
 - `diagnostics=[]`.
 
@@ -116,8 +116,8 @@ failure metrics несопоставимыми с deployment.
 ## Update
 
 ```bash
-shasum -a 256 -c openclaw-llm-action-judge-0.4.0.tgz.sha256
-openclaw plugins install ./openclaw-llm-action-judge-0.4.0.tgz --force
+shasum -a 256 -c openclaw-llm-action-judge-0.4.1.tgz.sha256
+openclaw plugins install ./openclaw-llm-action-judge-0.4.1.tgz --force
 openclaw plugins registry --refresh
 openclaw config validate
 openclaw gateway restart
@@ -129,15 +129,34 @@ openclaw plugins inspect llm-action-judge --runtime --json
 посмотрите точный список и удалите только старый judge path. Не удаляйте пути
 других plugins.
 
-## Rollback 0.4.0 → 0.3.0
+## Rollback 0.4.1 → 0.4.0
 
-Пока работает 0.4.0, сначала задайте `OPENCLAW_JUDGE_PROFILE=shadow` в durable
+Пока работает 0.4.1, сначала задайте `OPENCLAW_JUDGE_PROFILE=shadow` в durable
 environment service manager/platform, выполните rollout/restart и проверьте
 health. Shell-local значение для managed service недостаточно.
 
-Затем установите предыдущий проверенный artifact 0.3.0. Он использует тот же
-public ENV/profile и hook contract, но policy `2026-07-12.4` и старый
-`json_object` transport:
+Затем установите предыдущий проверенный artifact 0.4.0. Он сохраняет public
+ENV/profile, hook, model, policy и strict Structured Output contract, но не
+включает process-local HMAC action commitment и sealed holdout tooling 0.4.1:
+
+```bash
+shasum -a 256 -c openclaw-llm-action-judge-0.4.0.tgz.sha256
+openclaw plugins install ./openclaw-llm-action-judge-0.4.0.tgz --force
+openclaw plugins registry --refresh
+openclaw config validate
+openclaw gateway restart
+openclaw gateway health
+openclaw plugins inspect llm-action-judge --runtime --json
+```
+
+Проверьте runtime version `0.4.0`, два hook и `diagnostics=[]`. Rollback не
+отзывает API key — при incident с credential выполните отдельную
+rotation/revocation.
+
+### Further rollback 0.4.0 → 0.3.0
+
+Artifact 0.3.0 использует тот же public ENV/profile и hook contract,
+но policy `2026-07-12.4` и старый `json_object` transport:
 
 ```bash
 shasum -a 256 -c openclaw-llm-action-judge-0.3.0.tgz.sha256
@@ -148,10 +167,6 @@ openclaw gateway restart
 openclaw gateway health
 openclaw plugins inspect llm-action-judge --runtime --json
 ```
-
-Проверьте runtime version `0.3.0`, два hook и `diagnostics=[]`. Rollback не
-отзывает API key — при incident с credential выполните отдельную
-rotation/revocation.
 
 ### Further rollback 0.3.0 → 0.2.0
 

@@ -108,7 +108,12 @@ function normalizeOptions(options) {
 
 function responseContent(value) {
   try {
-    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    if (value === null || typeof value !== 'object' || Array.isArray(value)
+      || types.isProxy(value)) return undefined;
+    const model = Object.getOwnPropertyDescriptor(value, 'model');
+    if (!model || !Object.hasOwn(model, 'value') || model.value !== MODEL_ID) {
+      return undefined;
+    }
     const choices = value.choices;
     if (!Array.isArray(choices) || choices.length === 0) return undefined;
 

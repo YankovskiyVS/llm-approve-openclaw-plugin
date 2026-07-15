@@ -1,6 +1,6 @@
 # Integration contract
 
-Этот документ — black-box контракт `openclaw-llm-action-judge` 0.4.0 для
+Этот документ — black-box контракт `openclaw-llm-action-judge` 0.4.1 для
 команды, которая встраивает плагин в OpenClaw.
 
 ## Что делает пакет
@@ -60,10 +60,17 @@ Judge получает:
 - raw trusted user request текущего run;
 - tool name;
 - redacted/minimized params;
-- fixed policy version и SHA-256 exact-action hash.
+- fixed policy version и opaque keyed HMAC-SHA-256 exact-action commitment.
 
 Judge не получает assistant prose, transcript, tool results, raw correlation
 IDs или hidden reasoning.
+
+Commitment использует случайный 32-byte process-local key. Key не является ENV,
+не экспортируется, не сериализуется и не передаётся judge; judge только копирует
+непрозрачное значение в verdict. Wire-формат остаётся
+`sha256:<64 lowercase hex>`. Commitment стабилен для повторной проверки внутри
+одного process, но меняется после restart и не предназначен для cross-process
+correlation или внешнего пересчёта.
 
 ## Immutable internals
 
@@ -133,7 +140,7 @@ inspect показывал диагностируемое состояние.
 Append-only JSONL содержит только:
 
 - timestamp, fixed model/policy;
-- tool name и exact action hash;
+- tool name и opaque exact-action commitment;
 - хешированные agent/session/run/tool-call IDs;
 - decision, risk, authorization, confidence, outcome и latency;
 - effective mode/enforcement;

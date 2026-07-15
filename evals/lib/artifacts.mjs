@@ -2,11 +2,14 @@ import { constants as fsConstants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import {
   chmod,
+  link,
   lstat,
+  mkdir,
   mkdtemp,
   open,
-  rename,
+  realpath,
   rm,
+  rmdir,
 } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { types } from 'node:util';
@@ -33,11 +36,19 @@ const ARTIFACT_NAMES = Object.freeze([
   'reproduce.sh',
 ]);
 const ARTIFACT_NAME_SET = new Set(ARTIFACT_NAMES);
+const HOLDOUT_ARTIFACT_NAMES = Object.freeze([
+  ...ARTIFACT_NAMES,
+  'gate-result.json',
+  'gate-junit.xml',
+  'score-attestation.json',
+]);
+const HOLDOUT_ARTIFACT_NAME_SET = new Set(HOLDOUT_ARTIFACT_NAMES);
 const BUILD_REQUIRED_KEYS = Object.freeze([
   'manifest', 'attempts', 'summary', 'pricing', 'caseOutcomes', 'familyOutcomes',
 ]);
 const BUILD_OPTIONAL_KEYS = Object.freeze(['forbiddenValues']);
 const PUBLISH_KEYS = Object.freeze(['outputDir', 'files', 'forbiddenValues']);
+const BUILD_OPTION_KEYS = Object.freeze(['expectedRepeats', 'reproduceScript']);
 const ATTEMPT_KEYS = Object.freeze([
   'resume_key', 'manifest_hash', 'model', 'profile', 'case_id',
   'family_id', 'split', 'repeat', 'oracle_disposition',
@@ -58,6 +69,17 @@ const FILE_OPEN_FLAGS = fsConstants.O_WRONLY
 const DIRECTORY_OPEN_FLAGS = fsConstants.O_RDONLY
   | (fsConstants.O_DIRECTORY ?? 0)
   | (fsConstants.O_NOFOLLOW ?? 0);
+
+export const HOLDOUT_SCORE_REPRODUCE_SCRIPT = [
+  '#!/bin/sh',
+  'set -eu',
+  'if [ "$#" -ne 11 ]; then',
+  '  echo "usage: $0 INPUT ORACLE FREEZE_COMMITMENT FREEZE_SHA256 FREEZE_RECEIPT RECEIPT_SHA256 INFERENCE INFERENCE_SHA256 PRICING SCORER_GIT_SHA OUTPUT" >&2',
+  '  exit 64',
+  'fi',
+  'exec node ./evals/holdout-score.mjs --input "$1" --oracle "$2" --freeze-commitment "$3" --freeze-commitment-sha256 "$4" --freeze-receipt "$5" --freeze-receipt-sha256 "$6" --inference "$7" --inference-artifact-sha256 "$8" --pricing "$9" --scorer-git-sha "${10}" --output "${11}"',
+  '',
+].join('\n');
 
 function invalidArtifactInput() {
   throw new TypeError('invalid artifact input');
@@ -112,6 +134,21 @@ function buildDataValues(value) {
   for (const key of BUILD_REQUIRED_KEYS) result[key] = descriptors[key].value;
   result.forbiddenValues = descriptors.forbiddenValues?.value ?? [];
   return result;
+}
+
+function snapshotBuildOptions(value) {
+  const descriptors = plainDataDescriptors(value, 'invalid artifact input');
+  const keys = Object.keys(descriptors);
+  if (keys.some((key) => !BUILD_OPTION_KEYS.includes(key))) invalidArtifactInput();
+  const expectedRepeats = descriptors.expectedRepeats?.value ?? 3;
+  const reproduceScript = descriptors.reproduceScript?.value ?? null;
+  if (!Number.isInteger(expectedRepeats) || expectedRepeats < 1 || expectedRepeats > 10) {
+    invalidArtifactInput();
+  }
+  if (reproduceScript !== null && reproduceScript !== HOLDOUT_SCORE_REPRODUCE_SCRIPT) {
+    invalidArtifactInput();
+  }
+  return { expectedRepeats, reproduceScript };
 }
 
 function denseArrayValues(value, message) {
@@ -265,12 +302,15 @@ function snapshotFiles(files) {
       throw new TypeError('invalid artifact files');
     }
     const entries = [...Map.prototype.entries.call(files)];
-    if (entries.length !== ARTIFACT_NAMES.length) throw new TypeError('invalid artifact files');
+    const holdout = entries.length === HOLDOUT_ARTIFACT_NAMES.length;
+    const names = holdout ? HOLDOUT_ARTIFACT_NAMES : ARTIFACT_NAMES;
+    const nameSet = holdout ? HOLDOUT_ARTIFACT_NAME_SET : ARTIFACT_NAME_SET;
+    if (entries.length !== names.length) throw new TypeError('invalid artifact files');
     const result = new Map();
     for (const entry of entries) {
       if (!Array.isArray(entry) || entry.length !== 2) throw new TypeError('invalid artifact files');
       const [name, content] = entry;
-      if (typeof name !== 'string' || !ARTIFACT_NAME_SET.has(name) || result.has(name)) {
+      if (typeof name !== 'string' || !nameSet.has(name) || result.has(name)) {
         throw new TypeError('invalid artifact files');
       }
       if (typeof content === 'string') {
@@ -281,10 +321,10 @@ function snapshotFiles(files) {
         throw new TypeError('invalid artifact files');
       }
     }
-    for (const name of ARTIFACT_NAMES) {
+    for (const name of names) {
       if (!result.has(name)) throw new TypeError('invalid artifact files');
     }
-    return new Map(ARTIFACT_NAMES.map((name) => [name, result.get(name)]));
+    return new Map(names.map((name) => [name, result.get(name)]));
   } catch {
     throw new TypeError('invalid artifact files');
   }
@@ -298,14 +338,15 @@ function sha256(value) {
   return 'sha256:' + createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-export function buildArtifactFiles(input) {
+export function buildArtifactFiles(input, options = {}) {
   try {
     const fields = buildDataValues(input);
+    const buildOptions = snapshotBuildOptions(options);
     const manifest = snapshotAttemptManifest(fields.manifest);
     const attempts = denseArrayValues(fields.attempts, 'invalid artifact input');
     const aggregate = aggregateQualification({
       attempts,
-      expectedRepeats: 3,
+      expectedRepeats: buildOptions.expectedRepeats,
       pricing: fields.pricing,
     });
     assertRunIdentity(attempts, manifest);
@@ -342,7 +383,8 @@ export function buildArtifactFiles(input) {
         model_id: manifest.model_id,
         family_outcomes: aggregate.familyOutcomes,
       })],
-      ['reproduce.sh', renderReproduceScript(manifest.openclaw_version)],
+      ['reproduce.sh', buildOptions.reproduceScript
+        ?? renderReproduceScript(manifest.openclaw_version)],
     ]);
     assertForbiddenValuesAbsent(inMemoryBuffers(files), fields.forbiddenValues);
     return files;
@@ -382,9 +424,16 @@ async function assertParentDirectory(parent) {
   } catch {
     throw new TypeError('invalid artifact output parent');
   }
-  if (!parentStats.isDirectory() || parentStats.isSymbolicLink()) {
+  const canonical = await realpath(parent).catch(() => null);
+  let canonicalStats = null;
+  if (canonical !== null) {
+    canonicalStats = await lstat(canonical).catch(() => null);
+  }
+  if (!parentStats.isDirectory() || canonicalStats === null
+    || !canonicalStats.isDirectory() || canonicalStats.isSymbolicLink()) {
     throw new TypeError('invalid artifact output parent');
   }
+  return canonical;
 }
 
 async function assertOutputAbsent(outputDir) {
@@ -450,16 +499,19 @@ async function cleanupTemporaryDirectory(path) {
 
 export async function publishArtifacts(options) {
   const fields = snapshotPublishOptions(options);
-  const path = snapshotOutputPath(fields.outputDir);
+  const requestedPath = snapshotOutputPath(fields.outputDir);
   const files = snapshotFiles(fields.files);
   assertForbiddenValuesAbsent(files, fields.forbiddenValues);
 
-  await assertParentDirectory(path.parent);
-  await assertOutputAbsent(path.outputDir);
+  const parent = await assertParentDirectory(requestedPath.parent);
+  const outputDir = join(parent, basename(requestedPath.outputDir));
+  await assertOutputAbsent(outputDir);
 
   let temporaryDir = null;
+  let outputReserved = false;
+  const publishedNames = [];
   try {
-    temporaryDir = await mkdtemp(join(path.parent, '.judge-artifacts-tmp-'));
+    temporaryDir = await mkdtemp(join(parent, '.judge-artifacts-tmp-'));
     await chmod(temporaryDir, 0o700);
     for (const [name, content] of files) {
       await writeDurableFile(
@@ -469,12 +521,29 @@ export async function publishArtifacts(options) {
       );
     }
     await syncDirectory(temporaryDir, true);
-    await assertOutputAbsent(path.outputDir);
-    await rename(temporaryDir, path.outputDir);
+    try {
+      await mkdir(outputDir, { mode: 0o700 });
+      outputReserved = true;
+    } catch (error) {
+      if (error?.code === 'EEXIST') throw new TypeError('artifact output already exists');
+      throw new TypeError('artifact publication failed');
+    }
+    for (const [name] of files) {
+      await link(join(temporaryDir, name), join(outputDir, name));
+      publishedNames.push(name);
+    }
+    await syncDirectory(outputDir, true);
+    await cleanupTemporaryDirectory(temporaryDir);
     temporaryDir = null;
-    await syncDirectory(path.parent, false);
+    await syncDirectory(parent, false);
   } catch (error) {
     await cleanupTemporaryDirectory(temporaryDir);
+    if (outputReserved) {
+      for (const name of publishedNames) {
+        await rm(join(outputDir, name), { force: true }).catch(() => {});
+      }
+      await rmdir(outputDir).catch(() => {});
+    }
     if (error instanceof TypeError && [
       'artifact output already exists',
       'artifact output check failed',
