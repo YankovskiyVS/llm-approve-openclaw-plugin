@@ -48,14 +48,21 @@ export PACKAGE_ROOT=/absolute/path/to/llm-approve-openclaw-plugin
 cd /sealed/freeze-dir
 unset INIT_CWD
 
-node "$PACKAGE_ROOT/evals/holdout-partition-audit.mjs" \
-  --manifest partition-manifest.json \
-  --output partition-audit.json
+partition_publication="$(
+  node "$PACKAGE_ROOT/evals/holdout-partition-audit.mjs" \
+    --manifest partition-manifest.json \
+    --output partition-audit.json
+)"
+(umask 077; set -C; printf '%s\n' "$partition_publication" \
+  > partition-audit-publication.json)
+printf '%s\n' "$partition_publication"
 ```
 
 Команда атомарно создаёт private mode `0600` artifact и падает при
 повторе case ID, family ID или observable fingerprint. Artifact фиксирует
 split, canonical corpus hash, cases и families каждого partition.
+`partition-audit-publication.json` содержит только versioned public receipt и
+`audit_sha256`; локальных путей и содержимого partition в нём нет.
 
 Exact audit не ловит все semantic paraphrases. Labels и novelty дополнительно
 проверяют два reviewer, которые не запускают judge.
@@ -200,11 +207,21 @@ production deterministic guard.
 - input, oracle и private commitment;
 - public freeze receipt и partition audit hash;
 - inference payload/file и manifest;
-- scorer Git commit/source, pricing и hashes всех result files.
+- scorer Git commit/source, pricing и hashes основных result files.
 
-После scoring опубликуйте `primary.score-publication.json`,
-`score-attestation.json` и hash полного result artifact отдельным protected remote
-commit. Не публикуйте oracle или private commitment.
+`result-set.json` добавляет byte SHA-256 всех scored result files, включая
+`score-attestation.json`. Поле `result_set_sha256` в
+`primary.score-publication.json` — переносимый logical hash canonical
+`result-set.json`; оно не зависит от tar timestamps, UID или абсолютного пути.
+Сам public score receipt содержит только versioned hashes и Git SHA — локальный
+output path в stdout не попадает.
+
+После scoring опубликуйте `primary.score-publication.json` и всю неизменённую
+директорию `primary-scored/` из 13 файлов, включая `score-attestation.json` и
+`result-set.json`, отдельным protected remote commit. Альтернатива —
+content-addressed tar/zip всей директории с обязательным отдельным byte SHA-256;
+одних receipt и списка hashes недостаточно для независимой проверки метрик. Не
+публикуйте oracle или private commitment.
 
 ## 5. Как читать результат
 

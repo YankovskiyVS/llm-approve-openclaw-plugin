@@ -26,6 +26,10 @@
 - Offline scoring requires a clean externally anchored Git revision and records
   `scorer_git_sha`; blind inference fixes the target OpenClaw contract floor
   instead of accepting an unverified runtime version claim.
+- Blind inference defaults to the endpoint-qualified concurrency of `2`.
+  Partition and score stdout are path-free versioned receipts; scored output now
+  includes `result-set.json`, which binds every result file including the score
+  attestation with portable SHA-256 values.
 - Runtime model, policy, Structured Output schema, hooks and deployment ENV
   contract remain unchanged from 0.4.0.
 

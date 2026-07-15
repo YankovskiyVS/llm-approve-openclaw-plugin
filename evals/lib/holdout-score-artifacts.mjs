@@ -47,6 +47,10 @@ const RESULT_FILE_NAMES = Object.freeze([
   'gate-junit.xml',
   'reproduce.sh',
 ]);
+const RESULT_SET_FILE_NAMES = Object.freeze([
+  ...RESULT_FILE_NAMES,
+  'score-attestation.json',
+]);
 const SCORER_SOURCE_FILES = Object.freeze([
   ['package.json', new URL('../../package.json', import.meta.url)],
   ['package-lock.json', new URL('../../package-lock.json', import.meta.url)],
@@ -65,6 +69,7 @@ const SCORER_SOURCE_FILES = Object.freeze([
   ['evals/lib/holdout-commitments.mjs', new URL('./holdout-commitments.mjs', import.meta.url)],
   ['evals/lib/holdout-contracts.mjs', new URL('./holdout-contracts.mjs', import.meta.url)],
   ['evals/lib/holdout-gate.mjs', new URL('./holdout-gate.mjs', import.meta.url)],
+  ['evals/lib/holdout-partition-audit.mjs', new URL('./holdout-partition-audit.mjs', import.meta.url)],
   ['evals/lib/holdout-runner.mjs', new URL('./holdout-runner.mjs', import.meta.url)],
   ['evals/lib/holdout-score-artifacts.mjs', new URL('./holdout-score-artifacts.mjs', import.meta.url)],
   ['evals/lib/holdout-score-cli.mjs', new URL('./holdout-score-cli.mjs', import.meta.url)],
@@ -121,10 +126,10 @@ function deepFreeze(value) {
   return value;
 }
 
-function resultFileHashes(files) {
-  if (!(files instanceof Map) || files.size !== RESULT_FILE_NAMES.length) invalidInput();
+function resultFileHashes(files, names) {
+  if (!(files instanceof Map) || files.size !== names.length) invalidInput();
   const result = {};
-  for (const name of RESULT_FILE_NAMES) {
+  for (const name of names) {
     const content = files.get(name);
     if (typeof content !== 'string' && !Buffer.isBuffer(content)) invalidInput();
     result[name] = sha256Bytes(Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8'));
@@ -211,10 +216,17 @@ export function buildHoldoutScoreArtifacts(input) {
     concurrency: fields.concurrency,
     scorer_git_sha: fields.scorerGitSha,
     scorer_source_sha256: fields.scorerSourceSha256,
-    files_sha256: resultFileHashes(files),
+    files_sha256: resultFileHashes(files, RESULT_FILE_NAMES),
   });
   const attestationContent = canonicalStringify(attestation) + '\n';
   const attestationHash = sha256Bytes(Buffer.from(attestationContent, 'utf8'));
   files.set('score-attestation.json', attestationContent);
-  return Object.freeze({ files, attestation, attestationHash });
+  const resultSet = deepFreeze({
+    schema_version: 'judge-holdout-result-set.v1',
+    files_sha256: resultFileHashes(files, RESULT_SET_FILE_NAMES),
+  });
+  const resultSetCanonical = canonicalStringify(resultSet);
+  const resultSetHash = sha256Bytes(Buffer.from(resultSetCanonical, 'utf8'));
+  files.set('result-set.json', resultSetCanonical + '\n');
+  return Object.freeze({ files, attestation, attestationHash, resultSetHash });
 }

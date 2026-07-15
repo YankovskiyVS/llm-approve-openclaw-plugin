@@ -206,7 +206,9 @@ test('sealed audit -> freeze -> blind inference -> offline score is mechanically
     expectedScorerGitSha: 'b'.repeat(40),
     outputPath: join(root, 'scored'),
   }, { scorerGitSha: 'b'.repeat(40) });
-  assert.match(scored.attestationHash, /^sha256:[0-9a-f]{64}$/u);
+  assert.equal(scored.schema_version, 'judge-holdout-score-publication.v1');
+  assert.match(scored.score_attestation_sha256, /^sha256:[0-9a-f]{64}$/u);
+  assert.match(scored.result_set_sha256, /^sha256:[0-9a-f]{64}$/u);
   const attestation = JSON.parse(await readFile(join(root, 'scored', 'score-attestation.json')));
   assert.equal(attestation.freeze_receipt_sha256, holdoutFreezeReceiptHash(freezeReceipt));
   assert.equal(attestation.partition_audit_sha256, partitionAudit.audit_sha256);

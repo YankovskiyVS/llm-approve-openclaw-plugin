@@ -24,6 +24,7 @@ import {
 import { buildHoldoutSplit } from '../evals/lib/holdout-contracts.mjs';
 import { buildHoldoutInferenceArtifact } from '../evals/lib/holdout-runner.mjs';
 import { auditHoldoutPartitions } from '../evals/lib/holdout-partition-audit.mjs';
+import { computeScorerSourceCompositeHash } from '../evals/lib/holdout-score-artifacts.mjs';
 import { buildManifest, makeResumeKey } from '../evals/lib/manifest.mjs';
 import {
   assertHoldoutScoreCliPathBoundary,
@@ -62,6 +63,7 @@ const EXPECTED_ARTIFACTS = Object.freeze([
   'ranking.csv',
   'report.md',
   'reproduce.sh',
+  'result-set.json',
   'score-attestation.json',
   'summary.json',
 ]);
@@ -82,6 +84,22 @@ function canonicalHash(value) {
     .update(canonicalStringify(value), 'utf8')
     .digest('hex');
 }
+
+test('scorer source composite binds the transitive partition-audit implementation', async () => {
+  const target = 'evals/lib/holdout-partition-audit.mjs';
+  const seen = [];
+  const baseline = await computeScorerSourceCompositeHash(async (name, url) => {
+    seen.push(name);
+    return readFile(url);
+  });
+  const changed = await computeScorerSourceCompositeHash(async (name, url) => {
+    const bytes = await readFile(url);
+    return name === target ? Buffer.concat([bytes, Buffer.from('\nsource-change')]) : bytes;
+  });
+
+  assert.equal(seen.includes(target), true);
+  assert.notEqual(changed, baseline);
+});
 
 function scoreDeps(overrides = {}) {
   return { scorerGitSha: SCORER_GIT_SHA, ...overrides };
@@ -399,15 +417,21 @@ test('runHoldoutScoreCli writes the standard scored artifact directory offline',
   const result = await runHoldoutScoreCli(paths, scoreDeps());
 
   assert.deepEqual(result, {
-    outputDir: paths.outputPath,
-    holdoutId: data.input.holdout_id,
-    manifestHash: data.manifest.manifest_hash,
-    freezeCommitmentHash: paths.expectedFreezeCommitmentSha256,
-    freezeReceiptHash: paths.expectedFreezeReceiptSha256,
-    inferenceArtifactHash: paths.expectedInferenceArtifactSha256,
-    attestationHash: result.attestationHash,
+    schema_version: 'judge-holdout-score-publication.v1',
+    holdout_id: data.input.holdout_id,
+    input_sha256: data.oracle.input_sha256,
+    partition_audit_sha256: data.partitionAudit.audit_sha256,
+    freeze_commitment_sha256: paths.expectedFreezeCommitmentSha256,
+    freeze_receipt_sha256: paths.expectedFreezeReceiptSha256,
+    inference_payload_sha256: paths.expectedInferenceArtifactSha256,
+    manifest_hash: data.manifest.manifest_hash,
+    scorer_git_sha: SCORER_GIT_SHA,
+    score_attestation_sha256: result.score_attestation_sha256,
+    result_set_sha256: result.result_set_sha256,
   });
-  assert.match(result.attestationHash, HASH_PATTERN);
+  assert.match(result.score_attestation_sha256, HASH_PATTERN);
+  assert.match(result.result_set_sha256, HASH_PATTERN);
+  assert.equal(JSON.stringify(result).includes(parent), false);
   assert.equal(Object.isFrozen(result), true);
   assert.deepEqual((await readdir(paths.outputPath)).sort(), EXPECTED_ARTIFACTS);
   const summary = JSON.parse(await readFile(join(paths.outputPath, 'summary.json'), 'utf8'));
@@ -440,7 +464,7 @@ test('runHoldoutScoreCli writes the standard scored artifact directory offline',
 
   const attestationBytes = await readFile(join(paths.outputPath, 'score-attestation.json'));
   assert.equal(
-    result.attestationHash,
+    result.score_attestation_sha256,
     'sha256:' + createHash('sha256').update(attestationBytes).digest('hex'),
   );
   const attestation = JSON.parse(attestationBytes);
@@ -489,7 +513,9 @@ test('runHoldoutScoreCli writes the standard scored artifact directory offline',
   assert.match(attestation.scorer_source_sha256, HASH_PATTERN);
   assert.deepEqual(
     Object.keys(attestation.files_sha256).sort(),
-    EXPECTED_ARTIFACTS.filter((name) => name !== 'score-attestation.json').sort(),
+    EXPECTED_ARTIFACTS.filter((name) => ![
+      'result-set.json', 'score-attestation.json',
+    ].includes(name)).sort(),
   );
   for (const [name, hash] of Object.entries(attestation.files_sha256)) {
     assert.equal(
@@ -500,6 +526,28 @@ test('runHoldoutScoreCli writes the standard scored artifact directory offline',
       name,
     );
   }
+
+  const resultSetBytes = await readFile(join(paths.outputPath, 'result-set.json'));
+  const resultSet = JSON.parse(resultSetBytes);
+  assert.equal(resultSet.schema_version, 'judge-holdout-result-set.v1');
+  assert.deepEqual(
+    Object.keys(resultSet.files_sha256).sort(),
+    EXPECTED_ARTIFACTS.filter((name) => name !== 'result-set.json').sort(),
+  );
+  for (const [name, hash] of Object.entries(resultSet.files_sha256)) {
+    assert.equal(
+      hash,
+      'sha256:' + createHash('sha256')
+        .update(await readFile(join(paths.outputPath, name)))
+        .digest('hex'),
+      name,
+    );
+  }
+  assert.equal(result.result_set_sha256, canonicalHash(resultSet));
+  assert.notEqual(
+    result.result_set_sha256,
+    'sha256:' + createHash('sha256').update(resultSetBytes).digest('hex'),
+  );
 });
 
 test('runHoldoutScoreCli supports the inference artifact repeat count from 1 through 10', async (t) => {
@@ -510,7 +558,7 @@ test('runHoldoutScoreCli supports the inference artifact repeat count from 1 thr
       const paths = await writeFixture(parent, data);
       const result = await runHoldoutScoreCli(paths, scoreDeps());
 
-      assert.match(result.attestationHash, HASH_PATTERN);
+      assert.match(result.score_attestation_sha256, HASH_PATTERN);
       const summary = JSON.parse(await readFile(join(paths.outputPath, 'summary.json'), 'utf8'));
       assert.equal(summary.denominators.attempts, repeats * data.input.cases.length);
       const attestation = JSON.parse(await readFile(

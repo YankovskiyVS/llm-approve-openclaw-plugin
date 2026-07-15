@@ -439,6 +439,7 @@ export async function runHoldoutScoreCli(options, deps = {}) {
   let scored;
   let files;
   let attestationHash;
+  let resultSetHash;
   try {
     scored = scoreHoldout({
       input,
@@ -474,6 +475,7 @@ export async function runHoldoutScoreCli(options, deps = {}) {
     });
     files = artifacts.files;
     attestationHash = artifacts.attestationHash;
+    resultSetHash = artifacts.resultSetHash;
   } catch (error) {
     if (error instanceof TypeError && error.message === 'artifact contains forbidden value') {
       throw error;
@@ -487,13 +489,17 @@ export async function runHoldoutScoreCli(options, deps = {}) {
     forbiddenValues: dependencies.forbiddenValues,
   });
   return Object.freeze({
-    outputDir: fields.outputPath,
-    holdoutId: input.holdout_id,
-    manifestHash: inferenceArtifact.manifest.manifest_hash,
-    freezeCommitmentHash: freezeCommitmentSha256,
-    freezeReceiptHash: freezeReceiptSha256,
-    inferenceArtifactHash: inferenceArtifact.artifact_sha256,
-    attestationHash,
+    schema_version: 'judge-holdout-score-publication.v1',
+    holdout_id: input.holdout_id,
+    input_sha256: inputSha256,
+    partition_audit_sha256: freezeCommitment.partition_audit_sha256,
+    freeze_commitment_sha256: freezeCommitmentSha256,
+    freeze_receipt_sha256: freezeReceiptSha256,
+    inference_payload_sha256: inferenceArtifact.artifact_sha256,
+    manifest_hash: inferenceArtifact.manifest.manifest_hash,
+    scorer_git_sha: scorerGitSha,
+    score_attestation_sha256: attestationHash,
+    result_set_sha256: resultSetHash,
   });
 }
 

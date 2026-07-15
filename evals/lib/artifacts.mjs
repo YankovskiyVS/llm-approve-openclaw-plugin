@@ -41,6 +41,7 @@ const HOLDOUT_ARTIFACT_NAMES = Object.freeze([
   'gate-result.json',
   'gate-junit.xml',
   'score-attestation.json',
+  'result-set.json',
 ]);
 const HOLDOUT_ARTIFACT_NAME_SET = new Set(HOLDOUT_ARTIFACT_NAMES);
 const BUILD_REQUIRED_KEYS = Object.freeze([

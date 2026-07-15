@@ -195,7 +195,7 @@ test('holdout inference CLI parses exact relative JSON paths and bounded executi
     pricingPath: 'fixtures/pricing.json',
     outputPath: 'artifacts/inference.json',
     repeats: 3,
-    concurrency: 4,
+    concurrency: 2,
   });
   assert.deepEqual(parseHoldoutInferArgs([
     '--concurrency', '32',

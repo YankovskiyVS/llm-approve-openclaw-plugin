@@ -484,7 +484,7 @@ export function parseHoldoutInferArgs(argv) {
       : 3,
     concurrency: parsed.has('--concurrency')
       ? boundedInteger(parsed.get('--concurrency'), 1, 32)
-      : 4,
+      : 2,
   };
 }
 

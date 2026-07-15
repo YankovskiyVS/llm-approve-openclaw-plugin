@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import {
   lstat,
   mkdtemp,
@@ -10,6 +11,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { canonicalStringify } from '../src/action.js';
 import {
   parseHoldoutPartitionAuditArgs,
@@ -17,6 +19,8 @@ import {
 } from '../evals/lib/holdout-partition-audit-cli.mjs';
 import { validateHoldoutPartitionAudit } from '../evals/lib/holdout-partition-audit.mjs';
 import { makeCase } from './helpers/eval-fixtures.js';
+
+const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 function caseFor({ id, family, split, path }) {
   return makeCase({
@@ -108,6 +112,43 @@ test('partition audit CLI atomically publishes an exact private artifact', async
     manifestPath: 'manifest.json',
     outputPath: 'partition-audit.json',
   }, { invocationDirectory: root }), TypeError);
+});
+
+test('partition audit entrypoint prints only a versioned public hash receipt', async (t) => {
+  const root = await directory(t);
+  await prepare(root);
+  const env = { ...process.env };
+  delete env.INIT_CWD;
+  const child = spawn(process.execPath, [
+    join(PACKAGE_ROOT, 'evals', 'holdout-partition-audit.mjs'),
+    '--manifest', 'manifest.json',
+    '--output', 'partition-audit.json',
+  ], {
+    cwd: root,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const code = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', resolve);
+  });
+
+  assert.equal(code, 0);
+  assert.equal(stderr, '');
+  const publication = JSON.parse(stdout);
+  const artifact = validateHoldoutPartitionAudit(JSON.parse(await readFile(
+    join(root, 'partition-audit.json'),
+    'utf8',
+  )));
+  assert.deepEqual(publication, {
+    schema_version: 'judge-holdout-partition-audit-publication.v1',
+    audit_sha256: artifact.audit_sha256,
+  });
+  assert.equal(stdout, canonicalStringify(publication) + '\n');
 });
 
 test('partition audit CLI rejects symlinks and cross-partition collisions without output', async (t) => {

@@ -231,7 +231,7 @@ export async function main() {
     const options = parseHoldoutPartitionAuditArgs(process.argv.slice(2));
     const artifact = await runHoldoutPartitionAuditCli(options);
     process.stdout.write(canonicalStringify({
-      ok: true,
+      schema_version: 'judge-holdout-partition-audit-publication.v1',
       audit_sha256: artifact.audit_sha256,
     }) + '\n');
     return artifact;
