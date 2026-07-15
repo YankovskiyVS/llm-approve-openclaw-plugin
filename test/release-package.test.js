@@ -298,6 +298,71 @@ test('deployment docs distinguish managed service ENV and safe legacy rollback',
   assert.match(deployment, /config get plugins\.entries\.llm-action-judge\.config --json/u);
 });
 
+test('README is operational-first for supervised and autonomous startup', async () => {
+  const readme = await fs.readFile(path.join(PACKAGE_ROOT, 'README.md'), 'utf8');
+
+  for (const heading of [
+    '## Суть решения',
+    '## Из каких блоков состоит',
+    '## Установка',
+    '## Запуск в supervised',
+    '## Запуск в autonomous',
+    '## Переменные окружения',
+    '## Как проверить, что всё работает',
+  ]) {
+    assert.match(readme, new RegExp(`^${heading}$`, 'mu'), heading);
+  }
+
+  assert.match(
+    readme,
+    /OPENCLAW_JUDGE_PROFILE='supervised'\s+\\\s*\nopenclaw gateway run/u,
+  );
+  assert.match(
+    readme,
+    /OPENCLAW_JUDGE_PROFILE='autonomous'\s+\\\s*\nopenclaw gateway run/u,
+  );
+
+  for (const name of [
+    'OPENCLAW_JUDGE_API_KEY',
+    'OPENCLAW_JUDGE_PROFILE',
+    'OPENCLAW_JUDGE_BASE_URL',
+    'OPENCLAW_JUDGE_TIMEOUT_MS',
+    'OPENCLAW_JUDGE_AUDIT_PATH',
+    'OPENCLAW_JUDGE_LOG_LEVEL',
+  ]) {
+    assert.match(readme, new RegExp('\\| `' + name + '` \\|', 'u'), name);
+  }
+
+  for (const block of [
+    'OpenClaw hooks',
+    'LLM judge',
+    'Structured Output',
+    'Deterministic guard',
+    'Mode mapper',
+    'Audit',
+  ]) {
+    assert.match(readme, new RegExp(`\\*\\*${block}\\*\\*`, 'u'), block);
+  }
+
+  assert.match(
+    readme,
+    /OPENCLAW_JUDGE_BASE_URL[^\n]*только вместе с[^\n]*OPENCLAW_JUDGE_API_KEY/iu,
+  );
+  assert.match(readme, /приоритет над валидным legacy config/iu);
+  assert.match(
+    readme,
+    /ошибка конфигурации[\s\S]*permanent `supervised \+ enforce`/iu,
+  );
+  assert.match(
+    readme,
+    /OPENCLAW_JUDGE_AUDIT_PATH:-\$\{OPENCLAW_STATE_DIR:-\$HOME\/\.openclaw\}/u,
+  );
+  assert.match(
+    readme,
+    /В `supervised` ожидается approval или block, но не выполнение/iu,
+  );
+});
+
 test('release builder refuses to replace a pre-existing output directory', async (t) => {
   const { buildRelease } = await import('../scripts/build-release.mjs');
   const temporary = await tempDirectory(t);
