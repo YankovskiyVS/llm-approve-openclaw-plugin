@@ -134,7 +134,7 @@ inference_publication="$(
     --pricing .holdout-runtime/pricing.json \
     --output .holdout-runtime/primary.inference.json \
     --repeats 3 \
-    --concurrency 4
+    --concurrency 2
 )"
 (umask 077; set -C; printf '%s\n' "$inference_publication" \
   > .holdout-runtime/primary.inference-receipt.json)
@@ -147,6 +147,12 @@ fixed Cloud.ru client, требует `response.model=Qwen/Qwen3.5-397B-A17B` и
 rationale или oracle. Поле manifest `openclaw_version=2026.6.11` означает
 минимальную target-версию контракта плагина, а не утверждение, что этот
 component inference запускал OpenClaw.
+
+`--concurrency 2` зафиксирован по короткой проверке текущего Cloud.ru endpoint:
+при четырёх одновременных запросах два из четырёх достигли fixed timeout
+`8000 ms`, а при двух одновременных запросах успешно завершились четыре из
+четырёх. Это operational-настройка запуска, а не оценка абсолютной квоты
+provider и не изменение model/policy contract.
 
 До выдачи oracle опубликуйте inference receipt с `artifact_sha256` отдельным
 remote commit.

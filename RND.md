@@ -34,6 +34,13 @@ dependency; OpenClaw peer помечен optional для npm и связывае
 
 `autonomous + shadow` только вычисляет и аудитит would-be autonomous outcome; он не включает blocking enforcement. Плагин остаётся дополнительным слоем поверх native sandbox, tool policy и approval.
 
+Короткая operational-проверка active Cloud.ru endpoint показала ограничение
+параллелизма для этого запуска: при concurrency 4 успешно завершились 2/4
+запросов, два достигли fixed timeout `8000 ms`; при concurrency 2 завершились
+4/4 запросов. Поэтому sealed holdout запускается с concurrency 2. Выборка мала
+и не интерпретируется как постоянная provider quota или сравнительная метрика
+модели.
+
 ## Current qualification boundary
 
 Предыдущая safety evidence 0.4.0: policy `2026-07-14.6` прошла frozen-corpus
