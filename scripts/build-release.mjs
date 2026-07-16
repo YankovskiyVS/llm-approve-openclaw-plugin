@@ -36,6 +36,7 @@ const RELEASE_PACKAGE_FILES = Object.freeze([
   'src/plugin.js',
   'src/prompt.js',
   'src/redact.js',
+  'src/run-decision-store.js',
 ].sort());
 const FORBIDDEN_RELEASE_CONTENT = Object.freeze([
   /\/Users\/[^/\s]+\//u,

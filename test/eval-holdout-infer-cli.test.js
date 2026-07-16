@@ -651,6 +651,25 @@ test('inference source attestation changes when safe feedback changes', async ()
   assert.notEqual(changed.harness, baseline.harness);
 });
 
+test('inference source attestation changes when run decision history changes', async () => {
+  const baseline = await computeHoldoutInferenceSourceHashes();
+  let storeReads = 0;
+  const changed = await computeHoldoutInferenceSourceHashes(async (url) => {
+    const bytes = await readFile(url);
+    if (fileURLToPath(url) === join(PACKAGE_ROOT, 'src', 'run-decision-store.js')) {
+      storeReads += 1;
+      return Buffer.concat([bytes, Buffer.from('\n// simulated decision-store mutation\n')]);
+    }
+    return bytes;
+  });
+
+  assert.equal(storeReads, 1);
+  for (const key of Object.keys(baseline)) {
+    if (key !== 'harness') assert.equal(changed[key], baseline[key], key);
+  }
+  assert.notEqual(changed.harness, baseline.harness);
+});
+
 test('input files are size-bounded and must remain regular files', async (t) => {
   const directory = await fixtureDirectory(t);
   await prepareInputs(directory);

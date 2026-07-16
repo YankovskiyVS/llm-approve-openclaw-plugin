@@ -6,6 +6,7 @@ import defaultPlugin, {
 } from '../index.js';
 import { createActionJudgePlugin } from '../src/plugin.js';
 import { createContextStore } from '../src/context-store.js';
+import { createRunDecisionStore } from '../src/run-decision-store.js';
 import {
   createApprovalDescription,
   createBlockFeedback,
@@ -188,6 +189,35 @@ function assertBlocked(result, expectedCode = undefined) {
   assert.equal(Object.hasOwn(result, 'requireApproval'), false);
 }
 
+function runDecisionStore() {
+  return createRunDecisionStore({
+    ttlMs: 30 * 60 * 1000,
+    maxRuns: 1000,
+    historyLimit: 50,
+    consecutiveDenyLimit: 3,
+    rollingDenyLimit: 10,
+    now: () => 0,
+  });
+}
+
+function recordedDecision(overrides = {}) {
+  return {
+    tool_name: 'read',
+    tool_family: 'filesystem',
+    outcome: 'deny',
+    risk: 'high',
+    authorization: 'low',
+    reason_code: 'out_of_scope',
+    ...overrides,
+  };
+}
+
+function tripDecisionStore(store, runId) {
+  store.record(runId, recordedDecision());
+  store.record(runId, recordedDecision());
+  store.record(runId, recordedDecision());
+}
+
 test('exports the factory and default plugin, and registers exactly two priority hooks', () => {
   assert.strictEqual(createActionJudgePluginFromIndex, createActionJudgePlugin);
   assert.equal(defaultPlugin.id, PLUGIN_ID);
@@ -268,6 +298,255 @@ test('production store factory receives the bounded 30-minute defaults and Date.
     maxEntries: 1000,
     now: Date.now,
   });
+});
+
+test('production decision-store factory receives the fixed bounded breaker options', () => {
+  let received;
+  const decisionStore = {
+    isTripped() { return false; },
+    record() {
+      return { already_tripped: false, newly_tripped: false, tripped: false };
+    },
+  };
+  const harness = setup({
+    deps: {
+      createRunDecisionStore(options) {
+        received = options;
+        return decisionStore;
+      },
+    },
+  });
+
+  assert.equal(harness.registrations.length, 2);
+  assert.deepEqual(received, {
+    ttlMs: 30 * 60 * 1000,
+    maxRuns: 1000,
+    historyLimit: 50,
+    consecutiveDenyLimit: 3,
+    rollingDenyLimit: 10,
+    now: Date.now,
+  });
+});
+
+test('a pre-tripped run skips Qwen and blocks in both enforcing modes', async (t) => {
+  for (const mode of ['autonomous', 'supervised']) {
+    await t.test(mode, async () => {
+      const decisionStore = runDecisionStore();
+      tripDecisionStore(decisionStore, 'run-tripped');
+      const client = verdictClient();
+      const harness = setup({
+        pluginConfig: { mode, enforcement: 'enforce' },
+        client,
+        deps: { decisionStore },
+      });
+      capturePrompt(harness, 'Read status.', 'run-tripped');
+      const call = callData('run-tripped');
+
+      const result = await harness.beforeTool(call.event, call.ctx);
+
+      assert.equal(client.calls.length, 0);
+      assertBlocked(result, 'repeated_denials');
+      assert.equal(harness.auditEvents.length, 1);
+      assert.equal(harness.auditEvents[0].outcome, 'deny');
+      assert.equal(harness.auditEvents[0].feedback_code, 'repeated_denials');
+      assert.equal(harness.auditEvents[0].feedback_status, 'blocked');
+      const snapshot = decisionStore.snapshot('run-tripped');
+      assert.equal(snapshot.length, 4);
+      assert.equal(snapshot[3].reason_code, 'repeated_denials');
+
+      capturePrompt(harness, 'Read status.', 'run-fresh');
+      const freshCall = callData('run-fresh');
+      const freshResult = await harness.beforeTool(freshCall.event, freshCall.ctx);
+      assert.deepEqual(freshResult, { params: freshCall.event.params });
+      assert.equal(client.calls.length, 1);
+      assert.equal(decisionStore.isTripped('run-fresh'), false);
+    });
+  }
+});
+
+test('shadow observes a pre-tripped run through Qwen but audits the breaker candidate', async () => {
+  const decisionStore = runDecisionStore();
+  tripDecisionStore(decisionStore, 'run-shadow-tripped');
+  const client = verdictClient();
+  const harness = setup({
+    pluginConfig: { mode: 'autonomous', enforcement: 'shadow' },
+    client,
+    deps: { decisionStore },
+  });
+  capturePrompt(harness, 'Read status.', 'run-shadow-tripped');
+  const call = callData('run-shadow-tripped');
+
+  const result = await harness.beforeTool(call.event, call.ctx);
+
+  assert.equal(result, undefined);
+  assert.equal(client.calls.length, 1);
+  assert.equal(harness.auditEvents.length, 1);
+  assert.equal(harness.auditEvents[0].outcome, 'deny');
+  assert.equal(harness.auditEvents[0].feedback_code, null);
+  assert.equal(harness.auditEvents[0].feedback_status, null);
+  const snapshot = decisionStore.snapshot('run-shadow-tripped');
+  assert.equal(snapshot[3].reason_code, 'repeated_denials');
+});
+
+test('third denial keeps its reason and the fourth call is stopped before Qwen', async () => {
+  const decisionStore = runDecisionStore();
+  const client = verdictClient({
+    decision: 'deny',
+    risk: 'high',
+    authorization: 'low',
+    reason_code: 'out_of_scope',
+  });
+  const harness = setup({
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+    client,
+    deps: { decisionStore },
+  });
+  capturePrompt(harness, 'Read status.');
+  const call = callData();
+
+  const first = await harness.beforeTool(call.event, call.ctx);
+  const second = await harness.beforeTool(call.event, call.ctx);
+  const third = await harness.beforeTool(call.event, call.ctx);
+  const fourth = await harness.beforeTool(call.event, call.ctx);
+
+  assertBlocked(first, 'out_of_scope');
+  assertBlocked(second, 'out_of_scope');
+  assertBlocked(third, 'out_of_scope');
+  assertBlocked(fourth, 'repeated_denials');
+  assert.equal(client.calls.length, 3);
+  assert.deepEqual(
+    harness.auditEvents.map((event) => event.feedback_code),
+    ['out_of_scope', 'out_of_scope', 'out_of_scope', 'repeated_denials'],
+  );
+  const snapshot = decisionStore.snapshot('run-1');
+  assert.deepEqual(
+    snapshot.map((entry) => entry.reason_code),
+    ['out_of_scope', 'out_of_scope', 'out_of_scope', 'repeated_denials'],
+  );
+});
+
+test('an in-flight allow is replaced when another call trips the same run', async () => {
+  const decisionStore = runDecisionStore();
+  let release;
+  let startedResolve;
+  const started = new Promise((resolve) => { startedResolve = resolve; });
+  const client = {
+    calls: [],
+    review(input) {
+      this.calls.push(input);
+      startedResolve();
+      return new Promise((resolve) => {
+        release = () => resolve({ ok: true, text: verdictText(input), latencyMs: 8 });
+      });
+    },
+  };
+  const harness = setup({
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+    client,
+    deps: { decisionStore },
+  });
+  capturePrompt(harness, 'Read status.');
+  const call = callData();
+
+  const pending = harness.beforeTool(call.event, call.ctx);
+  await started;
+  tripDecisionStore(decisionStore, 'run-1');
+  release();
+  const result = await pending;
+
+  assert.equal(client.calls.length, 1);
+  assertBlocked(result, 'repeated_denials');
+  assert.equal(harness.auditEvents[0].outcome, 'deny');
+  assert.equal(harness.auditEvents[0].feedback_code, 'repeated_denials');
+  const snapshot = decisionStore.snapshot('run-1');
+  assert.equal(snapshot[3].reason_code, 'repeated_denials');
+});
+
+test('trusted calls record exactly once before audit and a new run stays independent', async () => {
+  const records = [];
+  let auditCompleted = false;
+  const decisionStore = {
+    isTripped() { return false; },
+    record(runId, value) {
+      assert.equal(auditCompleted, false);
+      records.push({ runId, value });
+      return { already_tripped: false, newly_tripped: false, tripped: false };
+    },
+  };
+  const audit = {
+    async write() {
+      assert.equal(records.length, 1);
+      auditCompleted = true;
+      return true;
+    },
+  };
+  const harness = setup({ audit, deps: { decisionStore } });
+  capturePrompt(harness, 'Read status.', 'run-new');
+  const call = callData('run-new');
+
+  const result = await harness.beforeTool(call.event, call.ctx);
+
+  assert.deepEqual(result, { params: call.event.params });
+  assert.equal(records.length, 1);
+  assert.equal(records[0].runId, 'run-new');
+  assert.deepEqual(records[0].value, {
+    tool_name: 'read',
+    tool_family: 'filesystem',
+    outcome: 'allow',
+    risk: 'low',
+    authorization: 'high',
+    reason_code: 'safe_and_authorized',
+  });
+});
+
+test('missing, throwing, async, and hostile decision-store methods fail closed', async (t) => {
+  const validStatus = { already_tripped: false, newly_tripped: false, tripped: false };
+  const cases = [
+    ['missing check', { record() { return validStatus; } }],
+    ['throwing check', {
+      isTripped() { throw new Error(PROMPT_SECRET); },
+      record() { return validStatus; },
+    }],
+    ['async check', {
+      isTripped() { return Promise.resolve(false); },
+      record() { return validStatus; },
+    }],
+    ['missing record', { isTripped() { return false; } }],
+    ['throwing record', {
+      isTripped() { return false; },
+      record() { throw new Error(PROMPT_SECRET); },
+    }],
+    ['hostile status', {
+      isTripped() { return false; },
+      record() {
+        return new Proxy({}, {
+          ownKeys() { throw new Error(PROMPT_SECRET); },
+        });
+      },
+    }],
+  ];
+
+  for (const [name, decisionStore] of cases) {
+    await t.test(name, async () => {
+      const client = verdictClient();
+      const harness = setup({
+        pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+        client,
+        deps: { decisionStore },
+      });
+      capturePrompt(harness);
+      const call = callData();
+
+      const result = await harness.beforeTool(call.event, call.ctx);
+
+      assertBlocked(result, 'invalid_judge_response');
+      assert.equal(JSON.stringify(result).includes(PROMPT_SECRET), false);
+      assert.equal(harness.auditEvents.length, 1);
+      assert.equal(harness.auditEvents[0].outcome, 'failure');
+      assert.equal(harness.auditEvents[0].feedback_code, 'invalid_judge_response');
+      assert.equal(harness.auditEvents[0].feedback_status, 'blocked');
+    });
+  }
 });
 
 test('captures the exact untrimmed prompt under the exact run ID', async () => {
@@ -1730,7 +2009,7 @@ test('store, client, parser, audit, and logger hostile getter/throw paths never 
   });
 });
 
-test('store/client/audit factory failures use inert fallbacks without escaping registration', async (t) => {
+test('store/decision/audit factory failures use safe fallbacks without escaping registration', async (t) => {
   await t.test('store factory failure leaves a registered missing-intent path', async () => {
     const harness = setup({
       deps: { createContextStore() { throw new Error(PROMPT_SECRET); } },
@@ -1739,6 +2018,23 @@ test('store/client/audit factory failures use inert fallbacks without escaping r
     assert.doesNotThrow(() => capturePrompt(harness));
     const call = callData();
     assertApproval(await harness.beforeTool(call.event, call.ctx), call.event.params);
+  });
+
+  await t.test('decision-store factory failure leaves a registered fail-closed path', async () => {
+    const client = verdictClient();
+    const harness = setup({
+      pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+      client,
+      deps: { createRunDecisionStore() { throw new Error(PROMPT_SECRET); } },
+    });
+    assert.equal(harness.registrations.length, 2);
+    capturePrompt(harness);
+    const call = callData();
+    assertBlocked(
+      await harness.beforeTool(call.event, call.ctx),
+      'invalid_judge_response',
+    );
+    assert.equal(client.calls.length, 0);
   });
 
   await t.test('audit factory failure does not change allow', async () => {

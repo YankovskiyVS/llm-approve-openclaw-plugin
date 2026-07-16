@@ -13,6 +13,7 @@ import {
   createBlockFeedback,
   feedbackRequiresBlock,
   selectFeedbackCode,
+  selectFeedbackOutcome,
 } from './feedback.js';
 import {
   applyLocalSafetyDowngrade,
@@ -32,12 +33,19 @@ import {
   arrayPrototypeIsPristine,
   objectPrototypeIsPristine,
 } from './intrinsics.js';
+import {
+  classifyToolFamily,
+  createRunDecisionStore,
+} from './run-decision-store.js';
 
 const PLUGIN_NAME = 'LLM Action Judge';
 const PLUGIN_DESCRIPTION = 'LLM-gated tool-call approval for OpenClaw';
 const HOOK_PRIORITY = -1000;
 const STORE_TTL_MS = 30 * 60 * 1000;
 const STORE_MAX_ENTRIES = 1000;
+const DECISION_STORE_HISTORY_LIMIT = 50;
+const DECISION_STORE_CONSECUTIVE_DENY_LIMIT = 3;
+const DECISION_STORE_ROLLING_DENY_LIMIT = 10;
 const SETUP_FAILED_MESSAGE = 'LLM action judge setup failed';
 const REGISTERED_MESSAGE = 'LLM action judge registered';
 const FAILURE_REASON = 'judge evaluation failed';
@@ -55,6 +63,13 @@ const GET_OWN_PROPERTY_DESCRIPTOR = Object.getOwnPropertyDescriptor;
 const HAS_OWN = Object.hasOwn;
 const REFLECT_OWN_KEYS = Reflect.ownKeys;
 const CREATE_OBJECT = Object.create;
+const IS_PROXY = utilTypes.isProxy;
+const REFLECT_APPLY = Reflect.apply;
+const DECISION_STATUS_KEYS = Object.freeze([
+  'already_tripped',
+  'newly_tripped',
+  'tripped',
+]);
 
 function readData(source, key) {
   try {
@@ -233,6 +248,102 @@ function clientFailureCode(reviewed) {
     : 'judge_unavailable';
 }
 
+function invalidDecisionStore() {
+  throw new TypeError('invalid run decision store');
+}
+
+function decisionStoreMethod(store, name) {
+  try {
+    if (store === null || typeof store !== 'object' || ARRAY_IS_ARRAY(store)
+      || IS_PROXY(store)) return null;
+    const prototype = GET_PROTOTYPE_OF(store);
+    if (prototype !== OBJECT_PROTOTYPE && prototype !== null) return null;
+    const descriptor = GET_OWN_PROPERTY_DESCRIPTOR(store, name);
+    if (!descriptor || !HAS_OWN(descriptor, 'value')
+      || typeof descriptor.value !== 'function' || IS_PROXY(descriptor.value)) return null;
+    return descriptor.value;
+  } catch {
+    return null;
+  }
+}
+
+function readDecisionStoreTrip(store, runId) {
+  const isTripped = decisionStoreMethod(store, 'isTripped');
+  if (!isTripped) return invalidDecisionStore();
+  const value = REFLECT_APPLY(isTripped, store, [runId]);
+  if (value === true || value === false) return value;
+  suppressRejection(value);
+  return invalidDecisionStore();
+}
+
+function decisionStatusSnapshot(value) {
+  try {
+    if (value === null || typeof value !== 'object' || ARRAY_IS_ARRAY(value)
+      || IS_PROXY(value)) return null;
+    const prototype = GET_PROTOTYPE_OF(value);
+    if (prototype !== OBJECT_PROTOTYPE && prototype !== null) return null;
+    const keys = REFLECT_OWN_KEYS(value);
+    if (keys.length !== DECISION_STATUS_KEYS.length) return null;
+    const result = CREATE_OBJECT(null);
+    for (let index = 0; index < DECISION_STATUS_KEYS.length; index += 1) {
+      const key = DECISION_STATUS_KEYS[index];
+      const descriptor = GET_OWN_PROPERTY_DESCRIPTOR(value, key);
+      if (!descriptor || !descriptor.enumerable || !HAS_OWN(descriptor, 'value')
+        || typeof descriptor.value !== 'boolean') return null;
+      result[key] = descriptor.value;
+    }
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index];
+      if (typeof key !== 'string'
+        || (key !== 'already_tripped' && key !== 'newly_tripped' && key !== 'tripped')) {
+        return null;
+      }
+    }
+    const valid = !result.already_tripped && !result.newly_tripped && !result.tripped
+      || !result.already_tripped && result.newly_tripped && result.tripped
+      || result.already_tripped && !result.newly_tripped && result.tripped;
+    return valid ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+function recordRunDecision(store, runId, metadata) {
+  const record = decisionStoreMethod(store, 'record');
+  if (!record) return invalidDecisionStore();
+  const value = REFLECT_APPLY(record, store, [runId, metadata]);
+  const snapshot = decisionStatusSnapshot(value);
+  if (snapshot) return snapshot;
+  suppressRejection(value);
+  return invalidDecisionStore();
+}
+
+function repeatedDenials() {
+  return { kind: 'deny', feedback_code: 'repeated_denials' };
+}
+
+function decisionMetadata(identity, result, judgeResult) {
+  const outcome = selectFeedbackOutcome(result);
+  const reasonCode = outcome === 'allow'
+    ? 'safe_and_authorized'
+    : selectFeedbackCode(result);
+  const repeated = reasonCode === 'repeated_denials';
+  const risk = readData(judgeResult, 'risk');
+  const authorization = readData(judgeResult, 'authorization');
+  return {
+    tool_name: identity.toolName,
+    tool_family: classifyToolFamily(identity.toolName),
+    outcome,
+    risk: repeated ? null : (risk.ok && typeof risk.value === 'string' ? risk.value : null),
+    authorization: repeated
+      ? null
+      : (authorization.ok && typeof authorization.value === 'string'
+        ? authorization.value
+        : null),
+    reason_code: reasonCode,
+  };
+}
+
 function getStoredPrompt(store, runId) {
   try {
     const get = methodValue(store, 'get');
@@ -377,6 +488,18 @@ function inertStore() {
   return { put() {}, get() { return undefined; } };
 }
 
+function failingDecisionStore() {
+  function unavailable() {
+    return invalidDecisionStore();
+  }
+  return {
+    isTripped: unavailable,
+    record: unavailable,
+    snapshot: unavailable,
+    size: unavailable,
+  };
+}
+
 function failingClient() {
   return { async review() { return { ok: false, reason: FAILURE_REASON, latencyMs: 0 }; } };
 }
@@ -389,7 +512,13 @@ export function createActionJudgePlugin(deps = {}) {
   const injectedStore = dependencyValue(deps, 'store', undefined);
   const injectedClient = dependencyValue(deps, 'client', undefined);
   const injectedAudit = dependencyValue(deps, 'audit', undefined);
+  const injectedDecisionStore = dependencyValue(deps, 'decisionStore', undefined);
   const storeFactory = dependencyValue(deps, 'createContextStore', createContextStore);
+  const decisionStoreFactory = dependencyValue(
+    deps,
+    'createRunDecisionStore',
+    createRunDecisionStore,
+  );
   const clientFactory = dependencyValue(deps, 'createJudgeClient', createJudgeClient);
   const auditFactory = dependencyValue(deps, 'createAuditWriter', createAuditWriter);
   const injectedEnvironment = dependencyValue(deps, 'environment', undefined);
@@ -436,6 +565,26 @@ export function createActionJudgePlugin(deps = {}) {
         });
       } catch {
         store = inertStore();
+        setupFailed = true;
+      }
+    }
+
+    let decisionStore = injectedDecisionStore;
+    if (decisionStore === undefined) {
+      try {
+        if (typeof decisionStoreFactory !== 'function') {
+          throw new TypeError('invalid decision store factory');
+        }
+        decisionStore = decisionStoreFactory({
+          ttlMs: STORE_TTL_MS,
+          maxRuns: STORE_MAX_ENTRIES,
+          historyLimit: DECISION_STORE_HISTORY_LIMIT,
+          consecutiveDenyLimit: DECISION_STORE_CONSECUTIVE_DENY_LIMIT,
+          rollingDenyLimit: DECISION_STORE_ROLLING_DENY_LIMIT,
+          now: Date.now,
+        });
+      } catch {
+        decisionStore = failingDecisionStore();
         setupFailed = true;
       }
     }
@@ -494,6 +643,9 @@ export function createActionJudgePlugin(deps = {}) {
       let latencyMs = 0;
       let result = failure();
       let expectedHash;
+      let trackedIdentity;
+      let decisionStoreCheckFailed = false;
+      let skipJudge = false;
 
       try {
         const identity = identitySnapshot(event, ctx);
@@ -509,7 +661,22 @@ export function createActionJudgePlugin(deps = {}) {
           envelope = undefined;
         }
 
-        if (identity.ok && actionMatchesIdentity(action, identity)
+        if (identity.ok && actionMatchesIdentity(action, identity)) {
+          trackedIdentity = identity;
+          try {
+            const alreadyTripped = readDecisionStoreTrip(decisionStore, identity.runId);
+            if (alreadyTripped) {
+              result = repeatedDenials();
+              if (config.enforcement !== 'shadow') skipJudge = true;
+            }
+          } catch {
+            result = failure();
+            decisionStoreCheckFailed = true;
+            skipJudge = true;
+          }
+        }
+
+        if (trackedIdentity !== undefined && !skipJudge
           && envelope !== undefined && typeof expectedHash === 'string') {
           const userPrompt = getStoredPrompt(store, identity.runId);
           if (isTrustedUserRequest(userPrompt)) {
@@ -588,8 +755,32 @@ export function createActionJudgePlugin(deps = {}) {
             result = failure();
           }
         }
+
+        if (trackedIdentity !== undefined && !decisionStoreCheckFailed) {
+          try {
+            if (readDecisionStoreTrip(decisionStore, trackedIdentity.runId)) {
+              result = repeatedDenials();
+            }
+          } catch {
+            result = failure();
+            decisionStoreCheckFailed = true;
+          }
+        }
       } catch {
         result = failure();
+      }
+
+      if (trackedIdentity !== undefined) {
+        try {
+          const recordStatus = recordRunDecision(
+            decisionStore,
+            trackedIdentity.runId,
+            decisionMetadata(trackedIdentity, result, judgeResult),
+          );
+          if (recordStatus.already_tripped) result = repeatedDenials();
+        } catch {
+          result = failure();
+        }
       }
 
       try {

@@ -133,6 +133,22 @@ test('scorer source composite binds the safe feedback implementation', async () 
   assert.notEqual(changed, baseline);
 });
 
+test('scorer source composite binds the run decision store implementation', async () => {
+  const target = 'src/run-decision-store.js';
+  const seen = [];
+  const baseline = await computeScorerSourceCompositeHash(async (name, url) => {
+    seen.push(name);
+    return readFile(url);
+  });
+  const changed = await computeScorerSourceCompositeHash(async (name, url) => {
+    const bytes = await readFile(url);
+    return name === target ? Buffer.concat([bytes, Buffer.from('\nsource-change')]) : bytes;
+  });
+
+  assert.equal(seen.includes(target), true);
+  assert.notEqual(changed, baseline);
+});
+
 function scoreDeps(overrides = {}) {
   return { scorerGitSha: SCORER_GIT_SHA, ...overrides };
 }

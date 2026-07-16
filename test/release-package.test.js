@@ -54,6 +54,7 @@ const EXPECTED_PACKAGE_FILES = [
   'src/plugin.js',
   'src/prompt.js',
   'src/redact.js',
+  'src/run-decision-store.js',
 ].sort();
 const FORBIDDEN_CONTENT = [
   /\/Users\/[^/\s]+\//u,
