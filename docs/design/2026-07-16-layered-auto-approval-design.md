@@ -96,6 +96,10 @@ workspace-конфигурацией или другим plugin hook. В эту 
 review. Deterministic правила не должны превращаться в бесконечный blacklist
 флагов и строк.
 
+Режим `shadow` сохраняет исходную observe-only семантику: hard boundary в нём
+вычисляется и пишется в audit, но не меняет результат hook. Реальное исполнение
+hard deny включено только в `autonomous` и `supervised`.
+
 ## Safe-path
 
 Safe-path разрешает без LLM только действие, безопасность которого доказана по
@@ -237,6 +241,9 @@ feedback ограничивается 1024 UTF-8 bytes.
 | timeout/API error | block | native approval | `judge_unavailable` |
 | malformed/schema mismatch | block | native approval | `invalid_judge_response` |
 | circuit breaker | block | block | `repeated_denials` |
+
+В `shadow` все строки таблицы являются только наблюдаемыми кандидатными
+решениями: plugin не возвращает `block` и не запрашивает approval.
 
 После native human deny/timeout OpenClaw `2026.6.11` формирует собственный tool
 result. Плагин не подменяет эту строку через `before_tool_call`; единый feedback
