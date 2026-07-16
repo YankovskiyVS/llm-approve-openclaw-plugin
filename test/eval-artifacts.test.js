@@ -96,7 +96,7 @@ function makeManifest({
       max_tokens: 256,
       thinking: false,
       response_format: 'json_schema',
-      timeout_ms: 8000,
+      timeout_ms: 30000,
     },
   });
 }
@@ -505,7 +505,7 @@ test('reproduce script binds the exact manifest OpenClaw version and fixed run p
   assert.equal(files.get('reproduce.sh'), expected);
 });
 
-test('ranking and report render the common read status family metric and bound', async () => {
+test('ranking and report label family and conditional attempt metrics with counts', async () => {
   const input = await artifactInput();
   const ranking = renderRankingCsv(input.summary, input.manifest, input.pricing);
   const report = renderReportMarkdown(input.summary, input.manifest);
@@ -517,15 +517,62 @@ test('ranking and report render the common read status family metric and bound',
   assert.equal(header.includes('common_read_status_passed'), true);
   assert.equal(header.includes('common_read_status_recall'), true);
   assert.equal(header.includes('common_read_status_recall_lower_95'), true);
+  assert.equal(header.includes('client_provider_response_failure'), true);
+  assert.equal(header.includes('safe_attempt_allow_rate_schema_valid'), true);
+  assert.equal(header.includes('latency_timeout_floor_p95_ms'), true);
+  assert.equal(header.includes('latency_timeout_floor_p95_is_lower_bound'), true);
   assert.equal(row[header.indexOf('common_read_status_families')], '1');
   assert.equal(row[header.indexOf('common_read_status_passed')], '0');
   assert.match(report, /Common read\/status passed: 0\/1/u);
   assert.match(report, /Common read\/status recall: 0/u);
   assert.match(report, /Common read\/status recall lower 95%: 0/u);
+  assert.match(report, /End-to-end safe family pass rate \(all repeats\): 0\/1 \(0\)/u);
+  assert.match(
+    report,
+    /Combined safe attempt allow rate among schema-valid verdicts: 0\/3 \(0\)/u,
+  );
+  assert.match(report, /Parser\/schema-invalid among verdict candidates:/u);
+  assert.match(report, /Verdict candidates\/schema-valid: 6\/6/u);
+  assert.match(report, /Client\/provider-response failure:/u);
+  assert.doesNotMatch(report, /Safe action recall among schema-valid responses:/u);
+  assert.doesNotMatch(report, /Timeout-censored latency/u);
   assert.match(report, /Raw judge MUST_ALLOW passed:/u);
   assert.match(report, /Raw judge MUST_BLOCK unsafe:/u);
   assert.match(report, /Guard saves:/u);
   assert.match(report, /Guard friction:/u);
+});
+
+test('report marks timeout-floor latency as a lower bound when a request times out', async () => {
+  const manifest = makeManifest();
+  const completedCase = makeCase({
+    id: 'completed-latency',
+    family_id: 'completed-latency-family',
+  });
+  const timeoutCase = makeCase({
+    id: 'timeout-latency',
+    family_id: 'timeout-latency-family',
+  });
+  const completed = await makeAttempt(completedCase, 1, 'allow', manifest);
+  const timedOut = await evaluateAttempt({
+    caseData: timeoutCase,
+    manifest,
+    repeat: 1,
+    reviewer: {
+      async review() {
+        return { ok: false, reason: 'request timed out', latencyMs: 30000 };
+      },
+    },
+  });
+  const { summary } = aggregateQualification({
+    attempts: [completed, timedOut],
+    expectedRepeats: 1,
+    pricing: pricingSnapshot(),
+  });
+
+  const report = renderReportMarkdown(summary, manifest);
+
+  assert.match(report, /Timeout-floor latency p95\/p99 ms: >=/u);
+  assert.doesNotMatch(report, /Timeout-censored latency/u);
 });
 
 test('JUnit rejects invalid XML 1.0 characters', async (t) => {

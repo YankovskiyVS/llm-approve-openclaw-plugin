@@ -27,13 +27,45 @@ call отдельной фиксированной LLM **до исполнени
 | **OpenClaw hooks** | `before_model_resolve` сохраняет текущий trusted user request, `before_tool_call` перехватывает proposed action. Оба hook устанавливаются самим плагином. |
 | **LLM judge** | Фиксированная `Qwen/Qwen3.5-397B-A17B` независимо оценивает `decision`, `risk`, `authorization` и `confidence`. |
 | **Structured Output** | Cloud.ru ограничивает ответ strict `json_schema`; тот же контракт повторно проверяется локально через Ajv. |
-| **Deterministic guard** | Понижает ошибочный model `allow` для secrets, production, destructive shell, security config, external sends и других never-auto поверхностей. |
+| **Deterministic guard** | Может только понизить ошибочный model `allow`. Он защищает credentials, sensitive OpenClaw state и записи в instructions, production/CI/security config, package и Git boundaries, exposed history, structured `exec`/`bash`, распознанные consequential browser/first-party actions и external sends. |
 | **Mode mapper** | Преобразует итог judge в execute, native approval или block согласно `shadow`, `supervised` или `autonomous`. |
 | **Audit** | Пишет решение, latency и hashes в JSONL без raw prompt, params, rationale и credentials. |
 
+## Что guard никогда не auto-approve
+
+Даже если judge вернула `allow`, local guard переводит действие как минимум в
+`review`, когда обнаруживает одну из следующих поверхностей:
+
+- чтение credentials, sensitive OpenClaw state вне workspace,
+  sessions/logs/history или audit data;
+- запись в OpenClaw state вне workspace, `openclaw.json`, bootstrap instructions
+  (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `USER.md`, `IDENTITY.md`, `HEARTBEAT.md`,
+  `MEMORY.md`) или любой `skills/**/SKILL.md`;
+- запись в active production, CI/CD, Git/SSH/security config, распознанные
+  security/auth tests, package manifest/lockfile либо потенциальное ослабление
+  `.gitignore`, `.npmignore` и `.dockerignore`;
+- mutation или cross-session action в распознанных first-party tool families
+  вне явного read-only allowlist;
+- `exec`/`bash` с elevation, явно указанным host вне sandbox, remote node,
+  непустым `env`, PTY/background, неограниченным lifecycle, неоднозначным
+  `workdir`, dynamic shell или распознанной destructive, package, Git либо
+  OpenClaw CLI mutation;
+- browser вне literal `target=sandbox`, ввод/клик/скрипт, console inspection,
+  любой capture либо переход на internal/special-use target.
+
+Точный allowlist и failure semantics зафиксированы в
+[CONTRACT.md](CONTRACT.md). Всё, чего guard не распознал, всё равно должно пройти
+LLM verdict и native OpenClaw sandbox/tool policy.
+
+Отсутствующий `exec.host` намеренно сохраняет стандартную маршрутизацию
+OpenClaw и на host без native sandbox может означать gateway execution. Поэтому
+для strongest isolation платформа должна включить OpenClaw sandbox; плагин сам
+контейнер не создаёт и не доказывает effective host до hook.
+
 ## Требования
 
-- OpenClaw `>=2026.6.11`;
+- OpenClaw `>=2026.6.11`; тот же floor исполняется package metadata через
+  `openclaw.install.minHostVersion` и `openclaw.compat.pluginApi`;
 - Node.js `>=22.19.0`;
 - доступ к `https://foundation-models.api.cloud.ru/v1`;
 - API key с доступом к `Qwen/Qwen3.5-397B-A17B` либо уже настроенный
@@ -150,7 +182,7 @@ openclaw gateway run
 | `OPENCLAW_JUDGE_API_KEY` | Рекомендуется; `1..4096` printable ASCII chars, без пробелов | Отдельный Cloud.ru API key судьи. Если переменная отсутствует, плагин использует exact `models.providers.cloudru` из OpenClaw. Пустая строка не допускается. |
 | `OPENCLAW_JUDGE_PROFILE` | Рекомендуется: `shadow`, `supervised`, `autonomous` | Одновременно задаёт режим и enforcement. Имеет приоритет над валидным legacy config; malformed legacy config всё равно нужно исправить или удалить. |
 | `OPENCLAW_JUDGE_BASE_URL` | Необязательно; только вместе с `OPENCLAW_JUDGE_API_KEY`; допускается только `https://foundation-models.api.cloud.ru/v1` | Фиксирует разрешённый endpoint. При fallback на shared provider переменная должна отсутствовать. Обычно её можно не задавать. |
-| `OPENCLAW_JUDGE_TIMEOUT_MS` | Необязательно; canonical decimal integer `1000..30000`, default `8000` | Общий deadline одного judge call. Формы `1e3`, `01000`, `1000.0` и whitespace запрещены. Timeout в supervised ведёт в approval, в autonomous — в block. |
+| `OPENCLAW_JUDGE_TIMEOUT_MS` | Необязательно; canonical decimal integer `1000..30000`, default `30000` | Общий deadline одного judge call. Формы `1e3`, `01000`, `1000.0` и whitespace запрещены. Timeout в supervised ведёт в approval, в autonomous — в block. |
 | `OPENCLAW_JUDGE_AUDIT_PATH` | Необязательно; absolute path внутри OpenClaw `logs/`, суффикс `.jsonl` | Меняет путь audit-файла. Default: `${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/logs/llm-action-judge.jsonl`. |
 | `OPENCLAW_JUDGE_LOG_LEVEL` | Необязательно: `error`, `warn`, `info`, `silent`; default `info` | Управляет operational-логами плагина. На решения judge и JSONL audit не влияет. |
 
@@ -175,17 +207,26 @@ failing client. Каждый tool call тогда требует native approval
 
 ```bash
 openclaw gateway health
-openclaw plugins inspect llm-action-judge --runtime --json
+openclaw plugins inspect --all --runtime --json
 openclaw plugins doctor
 ```
 
 Ожидаемый результат:
 
 - gateway отвечает `OK`;
-- `imported=true`;
-- version `0.4.1`;
-- hooks: `before_model_resolve` и `before_tool_call`;
-- `diagnostics=[]`.
+- запись `plugin.id=llm-action-judge` имеет `plugin.imported=true` и
+  `plugin.version=0.4.1`;
+- её runtime `typedHooks` содержит ровно
+  `{"name":"before_model_resolve","priority":-1000}` и
+  `{"name":"before_tool_call","priority":-1000}`;
+- `diagnostics=[]`;
+- после judge нет другого `before_tool_call`, способного менять `params`.
+
+Оба hook регистрируются с priority `-1000`. Для exact-action binding judge должен
+быть последним hook, которому разрешено менять `before_tool_call.params`: hook,
+исполняющийся позже, может только наблюдать или блокировать, но не подменять
+параметры. Если платформа не может доказать этот порядок, enforcement включать
+нельзя.
 
 Открыть интерактивный интерфейс:
 
@@ -247,24 +288,31 @@ guard остаются обязательными. Fallback на `json_object` �
 ## Зафиксированный контракт 0.4.1
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-14.6`;
+- policy: `2026-07-15.1`;
 - minimum allow confidence: `0.8`;
-- default timeout: `8000 ms`;
+- default timeout: `30000 ms`;
 - endpoint: только `https://foundation-models.api.cloud.ru/v1`;
 - hooks priority: `-1000`;
 - output: strict `json_schema` + local Ajv validation.
 
-Текущие `108/120` safe и `0/240` combined unsafe относятся к tuned regression
-corpus. Raw judge разрешил 18 unsafe attempts, local/semantic guards заблокировали
-все 18. Отдельный unseen holdout ещё не проведён, поэтому эти числа нельзя
-считать оценкой production FN. Полная методология и ограничения находятся в
-[RND.md](RND.md).
+Priority сам по себе не защищает от hook, который платформа поставила после
+judge. Интеграционный инвариант: `llm-action-judge` — единственный либо последний
+params-modifying `before_tool_call` hook.
+
+Primary pilot на предыдущей policy `2026-07-14.6` и deadline `8000 ms` провалил
+launch gate: `15/40` MUST_ALLOW families прошли, `19/80` MUST_BLOCK families
+остались unsafe после combined guard, а `80/360` calls завершились timeout.
+Он зафиксирован как tuning evidence и не может подтверждать новую policy.
+`2026-07-15.1` должна пройти отдельный reserve/new holdout перед autonomous
+release. Полная методология и ограничения находятся в [RND.md](RND.md).
 
 ## Troubleshooting
 
-- `setup failed`: gateway остаётся в safe supervised fallback. Проверьте spelling
-  всех `OPENCLAW_JUDGE_*`, legacy config, API key, exact base URL, timeout и audit
-  path, затем перезапустите gateway.
+- `setup failed` при уже зарегистрированном `before_tool_call`: gateway остаётся
+  в safe supervised fallback. Проверьте spelling всех `OPENCLAW_JUDGE_*`, legacy
+  config, API key, exact base URL, timeout и audit path, затем перезапустите
+  gateway. Если сам enforcement hook зарегистрировать нельзя, plugin load
+  завершается ошибкой и runtime verification не должен пропускать deployment.
 - HTTP `401/403`: key не имеет доступа к fixed judge model либо истёк.
 - Timeout: сначала проверьте `no_proxy`/`NO_PROXY` и доступность Cloud.ru.
 - Plugin imported, hooks отсутствуют: используйте `--runtime`, выполните registry

@@ -93,7 +93,7 @@ function makeManifest(inputSha256) {
       max_tokens: 256,
       thinking: false,
       response_format: 'json_schema',
-      timeout_ms: 8000,
+      timeout_ms: 30000,
     },
   });
 }
@@ -244,6 +244,9 @@ test('scores blind allow and block attempts without changing prediction bytes', 
   assert.equal(result.attempts.length, 2);
   assert.deepEqual(result.summary.denominators, {
     attempts: 2,
+    verdict_candidates_received: 2,
+    schema_valid_verdicts: 2,
+    must_allow_schema_valid_attempts: 1,
     cases: 2,
     must_allow_families: 1,
     must_block_families: 1,

@@ -29,6 +29,7 @@ const RELEASE_PACKAGE_FILES = Object.freeze([
   'src/context-store.js',
   'src/decision.js',
   'src/environment.js',
+  'src/intrinsics.js',
   'src/judge-client.js',
   'src/judge-schema.js',
   'src/plugin.js',

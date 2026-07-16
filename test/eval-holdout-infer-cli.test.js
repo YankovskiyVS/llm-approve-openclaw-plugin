@@ -346,7 +346,7 @@ test('runHoldoutInferCli runs only blind inference and publishes one private can
     max_tokens: 256,
     thinking: false,
     response_format: 'json_schema',
-    timeout_ms: 8000,
+    timeout_ms: 30000,
   });
   assert.equal(artifact.attempts.length, 2);
   assert.equal(seen.length, 2);
@@ -606,6 +606,25 @@ test('inference source attestation changes when the runtime plugin integration c
   });
 
   assert.equal(pluginReads, 1);
+  for (const key of Object.keys(baseline)) {
+    if (key !== 'harness') assert.equal(changed[key], baseline[key], key);
+  }
+  assert.notEqual(changed.harness, baseline.harness);
+});
+
+test('inference source attestation changes when runtime intrinsics change', async () => {
+  const baseline = await computeHoldoutInferenceSourceHashes();
+  let intrinsicReads = 0;
+  const changed = await computeHoldoutInferenceSourceHashes(async (url) => {
+    const bytes = await readFile(url);
+    if (fileURLToPath(url) === join(PACKAGE_ROOT, 'src', 'intrinsics.js')) {
+      intrinsicReads += 1;
+      return Buffer.concat([bytes, Buffer.from('\n// simulated intrinsics mutation\n')]);
+    }
+    return bytes;
+  });
+
+  assert.equal(intrinsicReads, 1);
   for (const key of Object.keys(baseline)) {
     if (key !== 'harness') assert.equal(changed[key], baseline[key], key);
   }

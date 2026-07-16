@@ -7,19 +7,19 @@
 Runtime contract 0.4.1 зафиксирован так:
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-14.6`;
+- policy: `2026-07-15.1`;
 - production profile: `temperature=0`, strict
   `response_format.type=json_schema`, `strict=true`, thinking off,
   `max_tokens=256`;
 - canonical contract: packaged `schemas/judge-verdict.schema.json`, повторная
   local validation через pinned `ajv@8.20.0`;
-- judge timeout: `8000 ms`;
+- judge timeout: `30000 ms`;
 - minimum OpenClaw: `2026.6.11`;
 - code defaults: `mode=autonomous`, `enforcement=shadow`;
 - recommended credential source: dedicated `OPENCLAW_JUDGE_API_KEY`, с atomic
   fallback на shared `models.providers.cloudru`;
 - strict ENV profiles, bounded timeout, confined audit path и lifecycle logging;
-- public ENV и оба hook не изменились относительно 0.3.0.
+- public ENV names и оба hook не изменились относительно 0.3.0.
 
 Fallback на `json_object` отсутствует. Provider/schema/Ajv failure остаётся
 fail-closed. Schema-valid output не означает safe: exact hash, rationale,
@@ -28,27 +28,42 @@ risk, authorization, confidence, opaque params и deterministic guard продо
 platform-команда может генерировать свои типы из JSON Schema.
 
 Source checkout сохраняет `npm test` и `eval:*` команды. Runtime `.tgz` содержит
-только reviewed 25-file allowlist; `test/`, `evals/`, corpora и dev-only scripts
+только reviewed 26-file allowlist; `test/`, `evals/`, corpora и dev-only scripts
 в handoff artifact не публикуются. Ajv устанавливается как pinned production
 dependency; OpenClaw peer помечен optional для npm и связывается host runtime.
 
 `autonomous + shadow` только вычисляет и аудитит would-be autonomous outcome; он не включает blocking enforcement. Плагин остаётся дополнительным слоем поверх native sandbox, tool policy и approval.
 
-Короткая operational-проверка active Cloud.ru endpoint показала ограничение
-параллелизма для этого запуска: при concurrency 4 успешно завершились 2/4
-запросов, два достигли fixed timeout `8000 ms`; при concurrency 2 завершились
-4/4 запросов. Поэтому sealed holdout запускается с concurrency 2. Выборка мала
-и не интерпретируется как постоянная provider quota или сравнительная метрика
-модели.
+Reasoning остаётся выключенным: bounded reasoning с последующим schema-valid
+final на текущем Foundation API не подтверждён. `max_tokens` ограничивает общий
+completion, и предыдущие thinking-пробы завершались без final content.
 
 ## Current qualification boundary
 
-Предыдущая safety evidence 0.4.0: policy `2026-07-14.6` прошла frozen-corpus
-qualification ниже. Старые `117/120` и `0/240` остаются только **historical
-baseline 0.2.0/0.3.0** с policy `2026-07-12.4` и `json_object`; их нельзя
-выдавать за результат 0.4.1. Для 0.4.1 добавлен sealed unseen-holdout
-протокол; его фактический blind результат фиксируется отдельно ниже после
-публикации commitments и inference receipt.
+Предыдущая safety evidence 0.4.0: policy `2026-07-14.6` прошла tuned
+frozen-corpus regression ниже. Старые `117/120` и `0/240` остаются только
+**historical baseline 0.2.0/0.3.0** с policy `2026-07-12.4` и `json_object`.
+
+Sealed primary pilot `primary-2026-07-15` на policy `2026-07-14.6`, timeout
+`8000 ms`, concurrency `2` и трёх repeats дал:
+
+- MUST_ALLOW families passed: **15/40**;
+- MUST_BLOCK families unsafe после combined guard: **19/80**;
+- catastrophic unsafe: **0/19**;
+- failures: **81/360** — **80/360** transport timeouts и **1/360**
+  client/provider-response `invalid_response` по текущему metric contract;
+- schema-valid verdict latency p50/p95/p99: **2237.8 / 6864.3 / 7752.4 ms**;
+- repeat agreement: **39.17%**.
+
+Raw LLM ошибочно разрешила `32/80` unsafe families, deterministic guard спас
+`13`, но оставшиеся `19` делают прогон release-blocker. Primary раскрыт и теперь
+является только tuning evidence; повторный scoring после изменений не может
+квалифицировать новую policy.
+
+После RCA создан candidate `2026-07-15.1`: deadline `30000 ms`, уточнённая
+семантика passive observation/authorization, structural browser/package/history
+guards и раздельные transport/parser/semantic metrics. Его доказательством может
+быть только отдельный reserve/new holdout.
 
 Qualification не является unseen holdout: deterministic guard последовательно
 дорабатывался по ошибкам на этом же 120-case corpus. Она доказывает regression
@@ -66,8 +81,9 @@ grammars или threat families.
 - unsafe auto-allow: **9/240**;
 - unsafe MUST_BLOCK families: **5/80**;
 - catastrophic unsafe families: **0/11**;
-- failures: **2/360** transport timeouts, оба отражены как schema-invalid
-  fail-closed attempts;
+- failures: **2/360** transport timeouts; historical scorer одновременно
+  отражал их как schema-invalid fail-closed attempts, но current contract не
+  включает timeout в parser/schema-invalid rate;
 - latency: p50 **1.912 s**, p95 **4.720 s**, p99 **6.643 s**.
 
 Ненулевые unsafe auto-allows сделали этот прогон **release-blocker**, а не

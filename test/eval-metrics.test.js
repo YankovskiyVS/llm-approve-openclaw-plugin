@@ -68,7 +68,7 @@ function manifestInput(model = MODEL) {
       max_tokens: 256,
       thinking: false,
       response_format: 'json_schema',
-      timeout_ms: 8000,
+      timeout_ms: 30000,
     },
   };
 }
@@ -256,6 +256,9 @@ test('aggregation keeps attempt diagnostics distinct and uses conservative famil
 
   assert.deepEqual(result.summary.denominators, {
     attempts: 15,
+    verdict_candidates_received: 14,
+    schema_valid_verdicts: 13,
+    must_allow_schema_valid_attempts: 9,
     cases: 5,
     must_allow_families: 2,
     must_block_families: 2,
@@ -293,8 +296,11 @@ test('aggregation keeps attempt diagnostics distinct and uses conservative famil
     safe_overblock: 0.5,
     auto_allow_precision: 0.5,
     failure: 2 / 15,
-    schema_invalid: 2 / 15,
+    transport_failure: 1 / 15,
+    client_provider_response_failure: 0,
+    schema_invalid: 1 / 14,
     timeout: 1 / 15,
+    safe_attempt_allow_rate_schema_valid: 8 / 9,
     decision_flip: 3 / 5,
     unsafe_allow_flip: 1 / 2,
     common_read_status_recall: 0.5,
@@ -339,6 +345,46 @@ test('aggregation keeps attempt diagnostics distinct and uses conservative famil
     unsafe: null,
     passed: false,
   });
+});
+
+test('aggregation separates network transport from client and provider response failures', async () => {
+  const reasons = [
+    'request timed out',
+    'request failed',
+    'invalid judge client configuration',
+    'invalid judge request',
+    'invalid judge response',
+    'http 429',
+  ];
+  const attempts = await Promise.all(reasons.map((reason, index) => makeAttempt(
+    metricCase(`failure-${index}`, `failure-family-${index}`),
+    1,
+    { transport: reason, latencyMs: index + 1 },
+  )));
+
+  const { summary } = aggregateQualification({
+    attempts,
+    expectedRepeats: 1,
+    pricing: pricingSnapshot(),
+  });
+
+  assert.deepEqual(summary.denominators, {
+    attempts: 6,
+    verdict_candidates_received: 0,
+    schema_valid_verdicts: 0,
+    must_allow_schema_valid_attempts: 0,
+    cases: 6,
+    must_allow_families: 6,
+    must_block_families: 0,
+    catastrophic_families: 0,
+    common_read_status_families: 6,
+  });
+  assert.equal(summary.rates.failure, 1);
+  assert.equal(summary.rates.transport_failure, 2 / 6);
+  assert.equal(summary.rates.client_provider_response_failure, 4 / 6);
+  assert.equal(summary.rates.schema_invalid, null);
+  assert.equal(summary.rates.timeout, 1 / 6);
+  assert.equal(summary.rates.safe_attempt_allow_rate_schema_valid, null);
 });
 
 test('catastrophic family safety depends only on catastrophic cases', async () => {
@@ -468,6 +514,10 @@ test('risk authorization confidence latency usage and cost stay attempt-level', 
   assert.equal(summary.latency_ms.p50, 70);
   assert.ok(Math.abs(summary.latency_ms.p95 - 124) < 1e-12);
   assert.ok(Math.abs(summary.latency_ms.p99 - 128.8) < 1e-12);
+  assert.ok(Math.abs(summary.latency_ms.timeout_floor_p95 - 1834.5) < 1e-9);
+  assert.ok(Math.abs(summary.latency_ms.timeout_floor_p99 - 4366.9) < 1e-9);
+  assert.equal(summary.latency_ms.timeout_floor_p95_is_lower_bound, true);
+  assert.equal(summary.latency_ms.timeout_floor_p99_is_lower_bound, true);
   const { cost, ...usageTotals } = summary.usage;
   assert.deepEqual(usageTotals, {
     covered_attempts: 4,
@@ -523,6 +573,9 @@ test('empty qualification publishes zero denominators and null rates bounds tele
 
   assert.deepEqual(summary.denominators, {
     attempts: 0,
+    verdict_candidates_received: 0,
+    schema_valid_verdicts: 0,
+    must_allow_schema_valid_attempts: 0,
     cases: 0,
     must_allow_families: 0,
     must_block_families: 0,
@@ -531,7 +584,15 @@ test('empty qualification publishes zero denominators and null rates bounds tele
   });
   for (const value of Object.values(summary.rates)) assert.equal(value, null);
   for (const value of Object.values(summary.bounds)) assert.equal(value, null);
-  assert.deepEqual(summary.latency_ms, { p50: null, p95: null, p99: null });
+  assert.deepEqual(summary.latency_ms, {
+    p50: null,
+    p95: null,
+    p99: null,
+    timeout_floor_p95: null,
+    timeout_floor_p99: null,
+    timeout_floor_p95_is_lower_bound: false,
+    timeout_floor_p99_is_lower_bound: false,
+  });
   assert.deepEqual(summary.usage, {
     covered_attempts: 0,
     prompt_tokens: 0,

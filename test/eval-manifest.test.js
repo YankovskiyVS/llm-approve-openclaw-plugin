@@ -35,7 +35,7 @@ const BASE_MANIFEST = {
     max_tokens: 256,
     thinking: false,
     response_format: 'json_schema',
-    timeout_ms: 8000,
+    timeout_ms: 30000,
   },
 };
 

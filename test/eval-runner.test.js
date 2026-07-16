@@ -78,7 +78,7 @@ function manifestInput() {
       max_tokens: 256,
       thinking: false,
       response_format: 'json_schema',
-      timeout_ms: 8000,
+      timeout_ms: 30000,
     },
   };
 }
@@ -714,7 +714,7 @@ test('thrown rejected Proxy and accessor reviewer boundaries become reviewer_fai
 });
 
 test('manifest deadline bounds native Promise and hostile thenable reviewers without retries', {
-  timeout: 10_000,
+  timeout: 35_000,
 }, async () => {
   const manifest = makeManifest();
   const cases = [uniqueCase(24), uniqueCase(25)];

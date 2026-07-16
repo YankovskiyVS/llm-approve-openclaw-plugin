@@ -540,7 +540,7 @@ test('uses the default timeout and clears its timer after success', async () => 
 
   assert.equal(result.ok, true);
   assert.equal(signal.aborted, false, 'completed request timer was not cleared');
-  assert.equal(JUDGE_TIMEOUT_MS, 8_000);
+  assert.equal(JUDGE_TIMEOUT_MS, 30_000);
 });
 
 test('validates provider configuration, fetch, and timeout without echoing input', () => {

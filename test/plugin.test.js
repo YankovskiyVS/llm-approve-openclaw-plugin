@@ -188,6 +188,51 @@ test('exports the factory and default plugin, and registers exactly two priority
   );
 });
 
+test('registration throws a fixed error when the enforcement hook cannot register', () => {
+  const fake = makeApi();
+  fake.api.on = function on(name, handler, options) {
+    if (name === 'before_tool_call') throw new Error(PROMPT_SECRET);
+    fake.registrations.push({ name, handler, options });
+  };
+  const plugin = createActionJudgePlugin({
+    client: verdictClient(),
+    audit: { async write() { return true; } },
+    environment: {},
+  });
+
+  assert.throws(
+    () => plugin.register(fake.api),
+    (error) => error instanceof Error
+      && error.message === 'LLM action judge setup failed'
+      && !error.message.includes(PROMPT_SECRET),
+  );
+  assert.deepEqual(
+    fake.registrations.map(({ name }) => name),
+    ['before_model_resolve'],
+  );
+  assert.deepEqual(fake.logs, ['LLM action judge setup failed']);
+});
+
+test('capture-hook registration failure keeps the enforcement hook fail-closed', async () => {
+  const fake = makeApi();
+  fake.api.on = function on(name, handler, options) {
+    if (name === 'before_model_resolve') throw new Error(PROMPT_SECRET);
+    fake.registrations.push({ name, handler, options });
+  };
+  const plugin = createActionJudgePlugin({
+    client: verdictClient(),
+    audit: { async write() { return true; } },
+    environment: {},
+  });
+
+  assert.doesNotThrow(() => plugin.register(fake.api));
+  assert.deepEqual(fake.registrations.map(({ name }) => name), ['before_tool_call']);
+  const gate = fake.registrations[0].handler;
+  const call = callData();
+  assertApproval(await gate(call.event, call.ctx), call.event.params);
+  assert.deepEqual(fake.logs, ['LLM action judge setup failed']);
+});
+
 test('production store factory receives the bounded 30-minute defaults and Date.now', () => {
   let received;
   const store = { put() {}, get() { return undefined; } };
@@ -442,6 +487,10 @@ test('local surface guard catches browser upload and auth-policy edits in both m
       paths: ['/workspace/reports/q3-summary.pdf'],
       inputRef: 'file-input',
     }],
+    ['browser', {
+      action: 'act',
+      request: { kind: 'click', ref: 'confirm' },
+    }],
     ['edit', {
       path: '/workspace/src/auth/policy.js',
       edits: [{ oldText: 'expirySeconds = 3600', newText: 'expirySeconds = 7200' }],
@@ -454,6 +503,17 @@ test('local surface guard catches browser upload and auth-policy edits in both m
       action: 'delete',
       channel: 'discord',
       messageId: '123',
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Update File: package.json\n@@\n-  "foo": "1"\n+  "foo": "2"\n*** End Patch',
+    }],
+    ['sessions_history', {
+      sessionKey: 'agent:main:main',
+      includeTools: true,
+      limit: 15,
+    }],
+    ['apply_patch', {
+      input: '*** Begin Patch\n*** Update File: .npmignore\n@@\n-internal/\n*** End Patch',
     }],
   ];
 
@@ -494,6 +554,10 @@ test('local surface guard catches sensitive reads, gateway secrets, and cross-se
       includeTools: false,
       limit: 15,
     }],
+    ['browser focus without an explicit sandbox target', 'browser', {
+      action: 'focus',
+      targetId: 'tab-1',
+    }],
   ];
 
   for (const [name, toolName, params] of riskyCalls) {
@@ -529,6 +593,17 @@ test('local surface guard preserves inert reads, safe config, and own-session hi
       sessionKey: 'agent:main:main',
       includeTools: false,
       limit: 15,
+    }],
+    ['own-session history default', 'sessions_history', {
+      sessionKey: 'agent:main:main',
+      limit: 15,
+    }],
+    ['protective exclusion addition', 'apply_patch', {
+      input: '*** Begin Patch\n*** Update File: .npmignore\n@@\n+internal/\n*** End Patch',
+    }],
+    ['inert package example', 'write', {
+      path: '/workspace/repo/package.json.example',
+      content: '{"dependencies":{}}',
     }],
   ];
 
@@ -599,6 +674,74 @@ test('a hostile client cannot erase opaque markers before the shared downgrade',
       assertBlocked(result);
       assert.equal(harness.auditEvents[0].decision, 'allow');
       assert.equal(harness.auditEvents[0].outcome, 'review');
+    });
+  }
+});
+
+test('Object.prototype pollution cannot turn inherited runtime fields into an approved call', async () => {
+  const client = verdictClient();
+  const harness = setup({
+    client,
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+  });
+  capturePrompt(harness, 'Wait in the active browser page.');
+  const call = callData('run-1', { action: 'act', kind: 'wait' });
+  call.event.toolName = 'browser';
+  call.ctx.toolName = 'browser';
+
+  let result;
+  Object.defineProperty(Object.prototype, 'request', {
+    configurable: true,
+    value: { kind: 'click', ref: 'confirm' },
+  });
+  try {
+    result = await harness.beforeTool(call.event, call.ctx);
+  } finally {
+    delete Object.prototype.request;
+  }
+
+  assertBlocked(result);
+  assert.equal(client.calls.length, 0);
+});
+
+test('audit cannot pollute Object.prototype after the final allow check', async (t) => {
+  for (const mode of ['autonomous', 'supervised']) {
+    await t.test(mode, async () => {
+      const client = verdictClient();
+      const audit = {
+        async write() {
+          Object.defineProperty(Object.prototype, 'request', {
+            configurable: true,
+            value: { kind: 'click', ref: 'confirm' },
+          });
+        },
+      };
+      const harness = setup({
+        audit,
+        client,
+        pluginConfig: { mode, enforcement: 'enforce' },
+      });
+      capturePrompt(harness, 'Wait in the active browser page.');
+      const call = callData('run-1', { action: 'act', kind: 'wait' });
+      call.event.toolName = 'browser';
+      call.ctx.toolName = 'browser';
+
+      let result;
+      let inheritedRequest;
+      try {
+        result = await harness.beforeTool(call.event, call.ctx);
+        inheritedRequest = result.params?.request;
+      } finally {
+        delete Object.prototype.request;
+      }
+
+      if (mode === 'autonomous') {
+        assertBlocked(result);
+      } else {
+        assert.equal(result.requireApproval.timeoutBehavior, 'deny');
+        assert.equal(inheritedRequest, undefined);
+      }
+      assert.equal(client.calls.length, 1);
     });
   }
 });
@@ -1154,7 +1297,7 @@ test('uses api.config.models.providers.cloudru with the default timeout', () => 
   assert.equal(harness.registrations.length, 2);
   assert.deepEqual(received, {
     providerConfig,
-    timeoutMs: 8_000,
+    timeoutMs: 30_000,
   });
 });
 

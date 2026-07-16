@@ -19,6 +19,8 @@ function summary(overrides = {}) {
     commonPassed: 2,
     commonTotal: 2,
     failure: 0,
+    transportFailure: 0,
+    clientProviderResponseFailure: 0,
     schemaInvalid: 0,
     timeout: 0,
     p95: 100,
@@ -30,6 +32,9 @@ function summary(overrides = {}) {
   return {
     denominators: {
       attempts: 10,
+      verdict_candidates_received: 10,
+      schema_valid_verdicts: 10,
+      must_allow_schema_valid_attempts: values.allowTotal,
       cases: 10,
       must_allow_families: values.allowTotal,
       must_block_families: values.blockTotal,
@@ -63,8 +68,11 @@ function summary(overrides = {}) {
       safe_overblock: safeRecall === null ? null : 1 - safeRecall,
       auto_allow_precision: 1,
       failure: values.failure,
+      transport_failure: values.transportFailure,
+      client_provider_response_failure: values.clientProviderResponseFailure,
       schema_invalid: values.schemaInvalid,
       timeout: values.timeout,
+      safe_attempt_allow_rate_schema_valid: safeRecall,
       decision_flip: 0,
       unsafe_allow_flip: 0,
       common_read_status_recall: rate(values.commonPassed, values.commonTotal),
@@ -78,6 +86,10 @@ function summary(overrides = {}) {
       p50: values.p95 === null ? null : values.p95 / 2,
       p95: values.p95,
       p99: values.p95,
+      timeout_floor_p95: values.p95,
+      timeout_floor_p99: values.p95,
+      timeout_floor_p95_is_lower_bound: values.timeout > 0,
+      timeout_floor_p99_is_lower_bound: values.timeout > 0,
     },
     usage: {
       covered_attempts: 10,
@@ -136,10 +148,16 @@ test('returns frozen payload-free rows with explicit family error metrics', () =
       safe_action_recall: 0.7,
       common_read_status_recall: 0.75,
       failure: 0.1,
+      transport_failure: 0,
+      client_provider_response_failure: 0,
       schema_invalid: 0.05,
       timeout: 0.02,
     },
-    latency_ms: { p95: 321 },
+    latency_ms: {
+      p95: 321,
+      timeout_floor_p95: 321,
+      timeout_floor_p95_is_lower_bound: true,
+    },
   }]);
   assert.equal(JSON.stringify(rows).includes(PAYLOAD_SENTINEL), false);
   assert.equal(Object.isFrozen(rows), true);
@@ -197,6 +215,38 @@ test('ranks failure, schema-invalid, timeout, p95, then candidate_id', () => {
   const tied = rankSelectionCandidates([candidate('a-model'), candidate('A-model')]);
   assert.deepEqual(tied.map(({ candidate_id }) => candidate_id), ['A-model', 'a-model']);
   assert.deepEqual(tied.map(({ rank }) => rank), [1, 2]);
+});
+
+test('ranks unavailable schema-invalid rate behind an observed parser-failure rate', () => {
+  const noVerdict = candidate('no-verdict', {
+    allowPassed: 0,
+    commonPassed: 0,
+    failure: 1,
+    clientProviderResponseFailure: 1,
+    schemaInvalid: null,
+    p95: null,
+  });
+  noVerdict.summary.denominators.verdict_candidates_received = 0;
+  noVerdict.summary.denominators.schema_valid_verdicts = 0;
+  noVerdict.summary.denominators.must_allow_schema_valid_attempts = 0;
+  noVerdict.summary.rates.safe_attempt_allow_rate_schema_valid = null;
+
+  const parserFailure = candidate('parser-failure', {
+    allowPassed: 0,
+    commonPassed: 0,
+    failure: 1,
+    schemaInvalid: 1,
+    p95: null,
+  });
+  parserFailure.summary.denominators.schema_valid_verdicts = 0;
+  parserFailure.summary.denominators.must_allow_schema_valid_attempts = 0;
+  parserFailure.summary.rates.safe_attempt_allow_rate_schema_valid = null;
+
+  const rows = rankSelectionCandidates([noVerdict, parserFailure]);
+  assert.deepEqual(rows.map(({ candidate_id }) => candidate_id), [
+    'parser-failure',
+    'no-verdict',
+  ]);
 });
 
 test('rejects non-exact, inconsistent, duplicate, or non-repeat-one summaries', () => {

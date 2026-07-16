@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
 const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const EXPECTED_FILES_FIELD = [
   '.env.example',
   'index.js',
@@ -46,6 +47,7 @@ const EXPECTED_PACKAGE_FILES = [
   'src/context-store.js',
   'src/decision.js',
   'src/environment.js',
+  'src/intrinsics.js',
   'src/judge-client.js',
   'src/judge-schema.js',
   'src/plugin.js',
@@ -70,7 +72,7 @@ async function tempDirectory(t) {
 
 async function npmPackDryRun() {
   const { stdout } = await execFileAsync(
-    'npm',
+    NPM,
     ['pack', '--json', '--dry-run', '--ignore-scripts'],
     { cwd: PACKAGE_ROOT, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
   );
@@ -102,6 +104,11 @@ test('package metadata pins the internal 0.4.1 release contract and lean runtime
   assert.deepEqual(metadata.dependencies, { ajv: '8.20.0' });
   assert.deepEqual(metadata.peerDependencies, { openclaw: '>=2026.6.11' });
   assert.deepEqual(metadata.peerDependenciesMeta, { openclaw: { optional: true } });
+  assert.deepEqual(metadata.openclaw, {
+    extensions: ['./index.js'],
+    install: { minHostVersion: '>=2026.6.11' },
+    compat: { pluginApi: '>=2026.6.11' },
+  });
   assert.deepEqual(metadata.files, EXPECTED_FILES_FIELD);
   assert.equal(metadata.scripts.test, 'node --test');
   assert.equal(metadata.scripts['eval:smoke'], 'node evals/dev-smoke.mjs');
@@ -158,6 +165,11 @@ test('release builder publishes one versioned tarball and matching sha256 into a
   assert.equal(runtimeMetadata.version, '0.4.1');
   assert.deepEqual(runtimeMetadata.dependencies, { ajv: '8.20.0' });
   assert.deepEqual(runtimeMetadata.peerDependenciesMeta, { openclaw: { optional: true } });
+  assert.deepEqual(runtimeMetadata.openclaw, {
+    extensions: ['./index.js'],
+    install: { minHostVersion: '>=2026.6.11' },
+    compat: { pluginApi: '>=2026.6.11' },
+  });
   const [sourceSchema, packagedSchema] = await Promise.all([
     fs.readFile(path.join(PACKAGE_ROOT, 'schemas', 'judge-verdict.schema.json'), 'utf8'),
     fs.readFile(
@@ -167,7 +179,7 @@ test('release builder publishes one versioned tarball and matching sha256 into a
   ]);
   assert.equal(packagedSchema, sourceSchema);
   const parsedSchema = JSON.parse(packagedSchema);
-  assert.equal(parsedSchema.properties.policy_version.const, '2026-07-14.6');
+  assert.equal(parsedSchema.properties.policy_version.const, '2026-07-15.1');
   assert.equal(parsedSchema.additionalProperties, false);
   for (const file of EXPECTED_PACKAGE_FILES) {
     const content = await fs.readFile(path.join(extracted, 'package', file), 'utf8');
@@ -202,15 +214,94 @@ test('manifest keeps model and policy immutable outside public config', async ()
   );
   assert.deepEqual(Object.keys(manifest.configSchema.properties).sort(), ['enforcement', 'mode']);
   assert.equal(JSON.stringify(manifest).includes('Qwen/Qwen3.5-397B-A17B'), false);
-  assert.equal(JSON.stringify(manifest).includes('2026-07-14.6'), false);
+  assert.equal(JSON.stringify(manifest).includes('2026-07-15.1'), false);
 });
 
 test('runtime smoke pins v0.4 and fails closed for schema-invalid judge output', async (t) => {
   const stateDir = await tempDirectory(t);
+  const { buildRelease } = await import('../scripts/build-release.mjs');
+  const release = await buildRelease({
+    packageRoot: PACKAGE_ROOT,
+    outputDir: path.join(stateDir, 'release'),
+  });
+  const consumerDir = path.join(stateDir, 'consumer');
+  const npmCache = path.join(stateDir, 'npm-cache');
+  await fs.mkdir(consumerDir);
+  await fs.mkdir(npmCache);
+  const expectedRuntimeDependencies = {
+    ajv: '8.20.0',
+    'fast-deep-equal': '3.1.3',
+    'fast-uri': '3.1.3',
+    'json-schema-traverse': '1.0.0',
+    'require-from-string': '2.0.2',
+  };
+  const localRuntimeDependencies = Object.keys(expectedRuntimeDependencies)
+    .map((name) => path.join(PACKAGE_ROOT, 'node_modules', name));
+  await execFileAsync(
+    NPM,
+    [
+      'install',
+      '--offline',
+      '--cache', npmCache,
+      '--ignore-scripts',
+      '--install-links',
+      '--omit=dev',
+      '--no-audit',
+      '--no-fund',
+      '--prefix', consumerDir,
+      release.tarballPath,
+      ...localRuntimeDependencies,
+    ],
+    {
+      cwd: stateDir,
+      encoding: 'utf8',
+      maxBuffer: 4 * 1024 * 1024,
+      env: {
+        ...process.env,
+        NODE_PATH: '',
+        npm_config_cache: npmCache,
+        npm_config_offline: 'true',
+      },
+    },
+  );
+  const runtimePackageRoot = path.join(
+    consumerDir,
+    'node_modules',
+    'openclaw-llm-action-judge',
+  );
+  const [installedRoot, canonicalConsumerDir, sourceRoot] = await Promise.all([
+    fs.realpath(runtimePackageRoot),
+    fs.realpath(consumerDir),
+    fs.realpath(PACKAGE_ROOT),
+  ]);
+  assert.equal(path.dirname(path.dirname(installedRoot)), canonicalConsumerDir);
+  assert.notEqual(installedRoot, sourceRoot);
+  const installedMetadata = JSON.parse(
+    await fs.readFile(path.join(runtimePackageRoot, 'package.json'), 'utf8'),
+  );
+  assert.equal(installedMetadata.name, 'openclaw-llm-action-judge');
+  assert.equal(installedMetadata.version, '0.4.1');
+  const canonicalNodeModules = await fs.realpath(path.join(consumerDir, 'node_modules'));
+  for (const [name, version] of Object.entries(expectedRuntimeDependencies)) {
+    const dependencyRoot = path.join(consumerDir, 'node_modules', name);
+    const dependencyStat = await fs.lstat(dependencyRoot);
+    assert.equal(dependencyStat.isSymbolicLink(), false, `${name} must not be a symlink`);
+    const canonicalDependencyRoot = await fs.realpath(dependencyRoot);
+    assert.equal(path.relative(canonicalNodeModules, canonicalDependencyRoot), name);
+    const dependencyMetadata = JSON.parse(
+      await fs.readFile(path.join(dependencyRoot, 'package.json'), 'utf8'),
+    );
+    assert.equal(dependencyMetadata.version, version);
+  }
   const { stdout } = await execFileAsync(
     process.execPath,
-    ['scripts/package-runtime-smoke.mjs', PACKAGE_ROOT, stateDir],
-    { cwd: PACKAGE_ROOT, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+    ['scripts/package-runtime-smoke.mjs', runtimePackageRoot, stateDir],
+    {
+      cwd: PACKAGE_ROOT,
+      encoding: 'utf8',
+      maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, NODE_PATH: '' },
+    },
   );
 
   assert.deepEqual(JSON.parse(stdout), {
@@ -243,8 +334,9 @@ test('release docs state the v0.4.1 structured-output contract and historical ev
     assert.match(document, /0\.4\.1/u);
   }
   for (const document of [readme, contract, security, rnd, changelog]) {
-    assert.match(document, /2026-07-14\.6/u);
+    assert.match(document, /2026-07-15\.1/u);
   }
+  for (const document of [readme, rnd, changelog]) assert.match(document, /2026-07-14\.6/u);
   for (const document of [readme, contract, security]) {
     assert.match(document, /json_schema/u);
     assert.match(document, /Ajv/u);

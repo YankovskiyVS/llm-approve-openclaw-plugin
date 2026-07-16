@@ -22,6 +22,7 @@ import {
   validateJudgeVerdict,
 } from './judge-schema.js';
 import { createJudgeClient } from './judge-client.js';
+import { objectPrototypeIsPristine } from './intrinsics.js';
 
 const PLUGIN_NAME = 'LLM Action Judge';
 const PLUGIN_DESCRIPTION = 'LLM-gated tool-call approval for OpenClaw';
@@ -136,6 +137,39 @@ function plainParams(action) {
   if (!params.ok || params.value === null || typeof params.value !== 'object'
     || Array.isArray(params.value)) return null;
   return params.value;
+}
+
+function detachInheritedParams(value, ancestors = new Set()) {
+  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return true;
+  if (typeof value !== 'object' || utilTypes.isProxy(value) || ancestors.has(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (Array.isArray(value)) {
+    if (prototype !== Array.prototype && prototype !== null) return false;
+  } else {
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    Object.setPrototypeOf(value, null);
+  }
+  ancestors.add(value);
+  try {
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string' || key === 'length') continue;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !Object.hasOwn(descriptor, 'value')
+        || !detachInheritedParams(descriptor.value, ancestors)) return false;
+    }
+    return true;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function safeParamsAfterPrototypePollution(params) {
+  if (objectPrototypeIsPristine()) return params;
+  try {
+    return detachInheritedParams(params) ? params : Object.create(null);
+  } catch {
+    return Object.create(null);
+  }
 }
 
 function actionMatchesIdentity(action, identity) {
@@ -319,6 +353,7 @@ export function createActionJudgePlugin(deps = {}) {
 
   function register(api) {
     let setupFailed = false;
+    let enforcementRegistrationFailed = false;
     let settingsValid = true;
     let settings;
     let config;
@@ -413,11 +448,11 @@ export function createActionJudgePlugin(deps = {}) {
       let judgeResult;
       let latencyMs = 0;
       let result = failure();
+      let expectedHash;
 
       try {
         const identity = identitySnapshot(event, ctx);
         let envelope;
-        let expectedHash;
         try {
           action = createAction({ event, ctx });
           const copiedParams = plainParams(action);
@@ -506,6 +541,28 @@ export function createActionJudgePlugin(deps = {}) {
           mode: config.mode,
           enforcement: config.enforcement,
         });
+        if (result.kind === 'allow') {
+          try {
+            const finalIdentity = identitySnapshot(event, ctx);
+            const finalAction = createAction({ event, ctx });
+            const finalEnvelope = createJudgeEnvelope(finalAction);
+            const finalHash = readData(finalEnvelope, 'action_hash');
+            const finalParams = plainParams(finalAction);
+            if (!finalIdentity.ok
+              || !actionMatchesIdentity(finalAction, finalIdentity)
+              || !finalHash.ok
+              || finalHash.value !== expectedHash
+              || finalParams === null) {
+              result = failure();
+            } else {
+              action = finalAction;
+              params = finalParams;
+            }
+          } catch {
+            result = failure();
+          }
+        }
+        params = safeParamsAfterPrototypePollution(params);
         return mapSafely(config, result, params);
       } catch {
         return safeFallbackMapping(config, failure(), params);
@@ -523,14 +580,20 @@ export function createActionJudgePlugin(deps = {}) {
         on.call(api, 'before_tool_call', gateToolCall, { priority: HOOK_PRIORITY });
       } catch {
         setupFailed = true;
+        enforcementRegistrationFailed = true;
       }
     } else {
       setupFailed = true;
+      enforcementRegistrationFailed = true;
     }
 
     if (setupFailed) {
       notifySetupFailure(lifecycleLogger);
-    } else {
+    }
+    if (enforcementRegistrationFailed) {
+      throw new Error(SETUP_FAILED_MESSAGE);
+    }
+    if (!setupFailed) {
       lifecycleLogger.info(REGISTERED_MESSAGE);
     }
   }

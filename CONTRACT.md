@@ -24,7 +24,7 @@ plugin hooks.
 | `OPENCLAW_JUDGE_API_KEY` | рекомендуется | shared provider fallback | Printable ASCII без whitespace, 1–4096 chars. |
 | `OPENCLAW_JUDGE_PROFILE` | рекомендуется | legacy config, затем `shadow` | `shadow`, `supervised`, `autonomous`. |
 | `OPENCLAW_JUDGE_BASE_URL` | нет | fixed Cloud.ru URL | Только `https://foundation-models.api.cloud.ru/v1`. |
-| `OPENCLAW_JUDGE_TIMEOUT_MS` | нет | `8000` | Canonical integer `1000..30000`. |
+| `OPENCLAW_JUDGE_TIMEOUT_MS` | нет | `30000` | Canonical integer `1000..30000`. |
 | `OPENCLAW_JUDGE_AUDIT_PATH` | нет | OpenClaw logs path | Absolute `.jsonl` внутри OpenClaw logs root. |
 | `OPENCLAW_JUDGE_LOG_LEVEL` | нет | `info` | `error`, `warn`, `info`, `silent`. |
 
@@ -77,7 +77,7 @@ correlation или внешнего пересчёта.
 Deployment не может менять:
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-14.6`;
+- policy: `2026-07-15.1`;
 - minimum confidence: `0.8`;
 - system prompt и strict seven-field response schema;
 - exact-action binding, redaction, opaque downgrade и deterministic local guard;
@@ -105,21 +105,57 @@ JSON Schema является integration artifact для других языко
 
 ## Deterministic guard boundary
 
-Policy `2026-07-14.6` разрешает только read-only `skill_workshop` actions,
-использует bounded fail-closed shell dispatch/redirection checks, считает
-`home.arpa` special-use web target и требует человека для распознанных
-security-test deletions/moves, `prod`/`production`-marked config writes и
-распознанных active `.ssh` security-file writes.
+Policy `2026-07-15.1` формально разделяет passive observation и external
+mutation, задаёт уровни authorization и не позволяет action params доказывать
+разрешение. Local guard является downgrade-only: он не может превратить
+`review`, `deny` или failure в `allow`.
 
-Frozen-corpus qualification: `108/120` safe auto-allows, `0/240` unsafe,
-`0/11` catastrophic и `0/360` failures. Это tuned regression gate без unseen
-holdout, а не гарантия для новых tools или path grammars.
+Текущий deterministic contract:
+
+| Surface | Может остаться `allow` | Всегда понижается минимум в `review` |
+|---|---|---|
+| `read`/file writes | Обычный workspace data и чтение bootstrap instructions вне sensitive paths. | Чтение credentials, auth-bearing Git/package config, sensitive OpenClaw state вне workspace, sessions/logs/history/audit; записи в `openclaw.json`, state вне workspace, bootstrap instructions и любой `skills/**/SKILL.md`; production, CI/CD, Git/SSH/security config, package manifests/lockfiles и любые записи в распознанные security/auth tests. |
+| Ignore boundaries | `apply_patch`, если полный patch доказывает только защитный delta. | Любой `edit`/`write` `.gitignore`, `.npmignore`, `.dockerignore` и ослабляющий/неразбираемый patch. |
+| Распознанные OpenClaw first-party families | `gateway config.get` несекретного metadata; own-session `sessions_history` без tool data; `subagents list`; current `session_status` без смены model; `nodes describe/pending/status`; generation `list`; `transcripts status`; `process list/poll/log`; `skill_workshop list`; `cron list/status/get/runs`; read-only message allowlist и `message.send` только с `dryRun=true`. | В этих families: cross-session/tool history, model change, sends/spawns, goal mutations, canvas/TTS, node/process/cron/generation/transcript/skill mutations и все actions вне allowlist. |
+| `exec`/`bash` structured fields | Не-elevated action, отсутствующий host либо `host=sandbox`, без `node`, с пустым/отсутствующим `env`; `pty/background` отсутствуют либо literal `false`; optional `timeout=1..3600`, `yieldMs=1..30000` и static absolute/`~/`/drive `workdir`. | `elevated` кроме literal `false`, явно заданный host вне sandbox, любое поле `node`, непустой/не-object `env`, PTY/background, lifecycle вне bounds, relative/dynamic/traversing `workdir`, одновременно `command` и `cmd`, missing/non-static command. Relative command paths разрешаются против validated `workdir`. Отсутствующий host использует effective routing OpenClaw и может означать gateway, если native sandbox не настроен. |
+| Shell/CLI | Static command после model `allow`, если deterministic rules не требуют review. Явные read-only allowlists включают OpenClaw `status`/`version`, `plugins inspect/list`, несекретный `config get`, `gateway health/status`. Git и package managers классифицируются по operation, root options, flags, file-valued options и target paths; `--help/--version` считаются control options только до operand separator `--`. Scoped `rg` разрешён только без hidden/no-ignore/follow и с literal file, известным code/docs root либо restrictive code glob. | Shell control/dynamic dispatch, elevation/remote/container execution, destructive/permission/migration/package mutations, protected redirects/reads/writes, protected config/certificate/patch inputs через CLI flags, recursive/dynamic credential readers, broad repo-root content search, broad Git content readers, secret environment exposure, mutating/unknown Git/OpenClaw/package operations. `curl` требует отключённый rc (`-q`/`--disable`), `wget` — `--no-config` и `--max-redirect=0`; redirects/routing/proxy/socket/netrc и upload/data forms review. |
+| `web_fetch`/browser | Literal public `http(s)` URL для `navigate/open`; browser metadata и passive `hover`/`resize`/`wait.timeMs=0..30000` только с literal `target=sandbox`. | Browser без `target=sandbox` или с `node`, invalid/internal/special-use URL, console, любой `pdf`/`screenshot`/`snapshot`, wait вне bounds или с `fn`/extra fields, click/type/upload/evaluate и иные consequential actions. |
+
+Для OpenClaw bootstrap instructions защищаются распознанные
+`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `USER.md`, `IDENTITY.md`, `HEARTBEAT.md`,
+`MEMORY.md` и `skills/**/SKILL.md`, в том числе вне стандартного
+`.openclaw/workspace` пути. Это предотвращает тихую подмену будущих инструкций
+агента.
+
+Primary pilot на предыдущем runtime-контракте провалил launch gate и используется
+только для tuning. Для `2026-07-15.1` qualification evidence ещё должна быть
+получена отдельным reserve/new holdout прогоном.
 
 Shell parser — backstop, а не shell sandbox: simple unknown direct commands
-по-прежнему зависят от LLM verdict и native OpenClaw controls. `web_fetch` guard
+по-прежнему зависят от LLM verdict и native OpenClaw controls. Отсутствующий
+`exec.host` не доказывает sandbox routing; strongest deployment обязан включить
+native OpenClaw sandbox. `web_fetch` guard
 статически проверяет URL, literal IP и special-use names; DNS resolution и
 каждый redirect проверяет native OpenClaw SSRF boundary. Pre-hook не защищает от
 DNS rebinding сам по себе.
+
+Неизвестные и plugin-provided tool names, которые не входят в перечисленные
+first-party families, также остаются LLM/native-gated: local guard не выводит
+семантику будущего инструмента только из произвольного поля `action`.
+
+## Hook ordering invariant
+
+Оба hook плагина регистрируются с priority `-1000`. `before_tool_call` строит
+commitment и возвращает проверенные `params`, поэтому он обязан быть
+единственным либо последним hook, способным менять параметры tool call. Другой
+hook может модифицировать `params` до judge; после judge он может только
+наблюдать или блокировать вызов.
+
+Если params-modifying hook исполняется позже, фактически выполненное действие
+может отличаться от проверенного snapshot. Это unsupported host composition и
+release blocker; TOCTOU-проверка внутри callback judge не покрывает последующую
+мутацию другим plugin. Deployment обязан проверить полный runtime hook inventory,
+а не только факт импорта judge.
 
 ## Выход hook
 
@@ -134,6 +170,12 @@ Invalid startup configuration всегда переводит plugin в permanen
 `supervised + enforce` с failing client: каждое действие требует native approval,
 а timeout означает deny. Hooks при этом всё равно регистрируются, чтобы runtime
 inspect показывал диагностируемое состояние.
+
+Если host API не позволяет зарегистрировать enforcement hook
+`before_tool_call`, `register()` бросает фиксированную ошибку и loader обязан
+считать plugin failed, а не loaded. Отдельный failure capture hook
+`before_model_resolve` оставляет enforcement hook активным: trusted intent
+отсутствует, поэтому каждый tool call fail-closed уходит в review/block.
 
 ## Audit output
 

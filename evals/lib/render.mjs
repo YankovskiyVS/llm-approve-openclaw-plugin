@@ -27,20 +27,28 @@ const SUMMARY_KEYS = Object.freeze([
 ]);
 const RATE_KEYS = Object.freeze([
   'unsafe_auto_allow', 'safe_action_recall', 'safe_overblock',
-  'auto_allow_precision', 'failure', 'schema_invalid', 'timeout',
+  'auto_allow_precision', 'failure', 'transport_failure',
+  'client_provider_response_failure', 'schema_invalid', 'timeout',
+  'safe_attempt_allow_rate_schema_valid',
   'decision_flip', 'unsafe_allow_flip', 'common_read_status_recall',
 ]);
 const BOUND_KEYS = Object.freeze([
   'unsafe_auto_allow_upper_95', 'safe_action_recall_lower_95',
   'common_read_status_recall_lower_95',
 ]);
-const LATENCY_KEYS = Object.freeze(['p50', 'p95', 'p99']);
+const LATENCY_KEYS = Object.freeze([
+  'p50', 'p95', 'p99',
+  'timeout_floor_p95', 'timeout_floor_p99',
+  'timeout_floor_p95_is_lower_bound', 'timeout_floor_p99_is_lower_bound',
+]);
 const USAGE_KEYS = Object.freeze([
   'covered_attempts', 'prompt_tokens', 'completion_tokens',
   'reasoning_tokens', 'cached_prompt_tokens', 'cost',
 ]);
 const DENOMINATOR_KEYS = Object.freeze([
-  'attempts', 'cases', 'must_allow_families', 'must_block_families',
+  'attempts', 'verdict_candidates_received', 'schema_valid_verdicts',
+  'must_allow_schema_valid_attempts', 'cases',
+  'must_allow_families', 'must_block_families',
   'catastrophic_families', 'common_read_status_families',
 ]);
 const FAMILY_KEYS = Object.freeze([
@@ -51,6 +59,8 @@ const RAW_FAMILY_KEYS = Object.freeze([
 ]);
 const MUST_BLOCK_KEYS = Object.freeze(['total', 'unsafe']);
 const MUST_ALLOW_KEYS = Object.freeze(['total', 'passed']);
+const AUTONOMOUS_MATRIX_KEYS = Object.freeze(['must_allow', 'must_block']);
+const AUTONOMOUS_COHORT_KEYS = Object.freeze(['executed_without_human', 'blocked']);
 const MANIFEST_KEYS = Object.freeze([
   'schema_version', 'git_sha', 'node_version', 'openclaw_version',
   'model_id', 'policy_version', 'corpus_sha256', 'pricing_sha256',
@@ -76,13 +86,20 @@ const RANKING_COLUMNS = Object.freeze([
   'safe_action_recall_lower_95',
   'common_read_status_recall_lower_95',
   'failure',
+  'transport_failure',
+  'client_provider_response_failure',
   'schema_invalid',
   'timeout',
+  'safe_attempt_allow_rate_schema_valid',
   'decision_flip',
   'unsafe_allow_flip',
   'latency_p50_ms',
   'latency_p95_ms',
   'latency_p99_ms',
+  'latency_timeout_floor_p95_ms',
+  'latency_timeout_floor_p99_ms',
+  'latency_timeout_floor_p95_is_lower_bound',
+  'latency_timeout_floor_p99_is_lower_bound',
   'covered_attempts',
   'prompt_tokens',
   'completion_tokens',
@@ -222,6 +239,16 @@ function requireNonnegativeNumber(value) {
   return value;
 }
 
+function requireBoolean(value) {
+  if (typeof value !== 'boolean') invalid();
+  return value;
+}
+
+function sameNumber(actual, expected) {
+  if (actual === null || expected === null) return actual === expected;
+  return Math.abs(actual - expected) <= Number.EPSILON * 4;
+}
+
 function scalar(value) {
   if (value === null) return '';
   if (typeof value === 'string') return value;
@@ -249,6 +276,7 @@ function summarySections(summary) {
     denominators: exactDataValues(values.denominators, DENOMINATOR_KEYS),
     family: exactDataValues(values.family, FAMILY_KEYS),
     rawFamily: exactDataValues(values.raw_family, RAW_FAMILY_KEYS),
+    autonomous: exactDataValues(values.autonomous_matrix, AUTONOMOUS_MATRIX_KEYS),
     rates: exactDataValues(values.rates, RATE_KEYS),
     bounds: exactDataValues(values.bounds, BOUND_KEYS),
     latency: exactDataValues(values.latency_ms, LATENCY_KEYS),
@@ -257,7 +285,12 @@ function summarySections(summary) {
   for (const value of Object.values(result.denominators)) requireInteger(value);
   for (const value of Object.values(result.rates)) requireRate(value);
   for (const value of Object.values(result.bounds)) requireRate(value);
-  for (const value of Object.values(result.latency)) requireNonnegativeNumber(value);
+  for (const key of [
+    'p50', 'p95', 'p99', 'timeout_floor_p95', 'timeout_floor_p99',
+  ]) requireNonnegativeNumber(result.latency[key]);
+  for (const key of [
+    'timeout_floor_p95_is_lower_bound', 'timeout_floor_p99_is_lower_bound',
+  ]) requireBoolean(result.latency[key]);
   for (const key of USAGE_KEYS.slice(0, -1)) requireInteger(result.usage[key]);
   requireNonnegativeNumber(result.usage.cost);
   for (const [key, expected] of [
@@ -278,6 +311,21 @@ function summarySections(summary) {
   }
   requireInteger(result.rawFamily.gate_saves);
   requireInteger(result.rawFamily.gate_friction);
+  for (const cohortName of AUTONOMOUS_MATRIX_KEYS) {
+    const cohort = exactDataValues(result.autonomous[cohortName], AUTONOMOUS_COHORT_KEYS);
+    for (const value of Object.values(cohort)) requireInteger(value);
+    result.autonomous[cohortName] = cohort;
+  }
+  const conditionalSafeAttempts = result.denominators.must_allow_schema_valid_attempts;
+  const conditionalSafeAllows = result.autonomous.must_allow.executed_without_human;
+  const conditionalSafeRate = conditionalSafeAttempts === 0
+    ? null
+    : conditionalSafeAllows / conditionalSafeAttempts;
+  if (conditionalSafeAllows > conditionalSafeAttempts
+    || !sameNumber(
+      result.rates.safe_attempt_allow_rate_schema_valid,
+      conditionalSafeRate,
+    )) invalid();
   return result;
 }
 
@@ -303,6 +351,15 @@ function priceFor(pricing, modelId) {
 
 function display(value) {
   return value === null ? 'n/a' : scalar(value);
+}
+
+function displayRatio(numerator, denominator, ratio) {
+  return `${numerator}/${denominator} (${display(ratio)})`;
+}
+
+function displayTimeoutFloor(value, isLowerBound) {
+  if (value === null) return 'n/a';
+  return `${isLowerBound ? '>=' : ''}${scalar(value)}`;
 }
 
 function xml(value) {
@@ -390,13 +447,24 @@ export function renderRankingCsv(summary, manifest, pricing) {
       common_read_status_recall_lower_95:
         sections.bounds.common_read_status_recall_lower_95,
       failure: sections.rates.failure,
+      transport_failure: sections.rates.transport_failure,
+      client_provider_response_failure:
+        sections.rates.client_provider_response_failure,
       schema_invalid: sections.rates.schema_invalid,
       timeout: sections.rates.timeout,
+      safe_attempt_allow_rate_schema_valid:
+        sections.rates.safe_attempt_allow_rate_schema_valid,
       decision_flip: sections.rates.decision_flip,
       unsafe_allow_flip: sections.rates.unsafe_allow_flip,
       latency_p50_ms: sections.latency.p50,
       latency_p95_ms: sections.latency.p95,
       latency_p99_ms: sections.latency.p99,
+      latency_timeout_floor_p95_ms: sections.latency.timeout_floor_p95,
+      latency_timeout_floor_p99_ms: sections.latency.timeout_floor_p99,
+      latency_timeout_floor_p95_is_lower_bound:
+        sections.latency.timeout_floor_p95_is_lower_bound,
+      latency_timeout_floor_p99_is_lower_bound:
+        sections.latency.timeout_floor_p99_is_lower_bound,
       covered_attempts: sections.usage.covered_attempts,
       prompt_tokens: sections.usage.prompt_tokens,
       completion_tokens: sections.usage.completion_tokens,
@@ -458,16 +526,23 @@ export function renderReportMarkdown(summary, manifest) {
       '## Rates and bounds',
       '',
       `- Unsafe auto-allow: ${display(sections.rates.unsafe_auto_allow)}`,
-      `- Safe action recall: ${display(sections.rates.safe_action_recall)}`,
+      `- End-to-end safe family pass rate (all repeats): ${displayRatio(mustAllow.passed, mustAllow.total, sections.rates.safe_action_recall)}`,
+      `- Combined safe attempt allow rate among schema-valid verdicts: ${displayRatio(sections.autonomous.must_allow.executed_without_human, sections.denominators.must_allow_schema_valid_attempts, sections.rates.safe_attempt_allow_rate_schema_valid)}`,
       `- Common read/status recall: ${display(sections.rates.common_read_status_recall)}`,
       `- Unsafe auto-allow upper 95%: ${display(sections.bounds.unsafe_auto_allow_upper_95)}`,
       `- Safe action recall lower 95%: ${display(sections.bounds.safe_action_recall_lower_95)}`,
       `- Common read/status recall lower 95%: ${display(sections.bounds.common_read_status_recall_lower_95)}`,
       `- Failure: ${display(sections.rates.failure)}`,
+      `- Transport failure: ${display(sections.rates.transport_failure)}`,
+      `- Client/provider-response failure: ${display(sections.rates.client_provider_response_failure)}`,
+      `- Verdict candidates/schema-valid: ${sections.denominators.verdict_candidates_received}/${sections.denominators.schema_valid_verdicts}`,
+      `- Parser/schema-invalid among verdict candidates: ${display(sections.rates.schema_invalid)}`,
+      `- Timeout: ${display(sections.rates.timeout)}`,
       '',
       '## Runtime',
       '',
-      `- Latency p50/p95/p99 ms: ${display(sections.latency.p50)} / ${display(sections.latency.p95)} / ${display(sections.latency.p99)}`,
+      `- Schema-valid verdict latency p50/p95/p99 ms: ${display(sections.latency.p50)} / ${display(sections.latency.p95)} / ${display(sections.latency.p99)}`,
+      `- Timeout-floor latency p95/p99 ms: ${displayTimeoutFloor(sections.latency.timeout_floor_p95, sections.latency.timeout_floor_p95_is_lower_bound)} / ${displayTimeoutFloor(sections.latency.timeout_floor_p99, sections.latency.timeout_floor_p99_is_lower_bound)}`,
       `- Usage-covered attempts: ${sections.usage.covered_attempts}`,
       `- Cost: ${display(sections.usage.cost)}`,
       '',

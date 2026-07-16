@@ -2,7 +2,8 @@
 
 ## Requirements
 
-- OpenClaw `>=2026.6.11`;
+- OpenClaw `>=2026.6.11`; archive install enforces the same floor through
+  `openclaw.install.minHostVersion` and `openclaw.compat.pluginApi`;
 - Node.js `>=22.19.0`;
 - доступ к `https://foundation-models.api.cloud.ru/v1`;
 - API key с доступом к `Qwen/Qwen3.5-397B-A17B`;
@@ -33,7 +34,7 @@ service manager/platform до restart:
 OPENCLAW_JUDGE_API_KEY=<secret-from-platform>
 OPENCLAW_JUDGE_PROFILE=shadow
 OPENCLAW_JUDGE_BASE_URL=https://foundation-models.api.cloud.ru/v1
-OPENCLAW_JUDGE_TIMEOUT_MS=8000
+OPENCLAW_JUDGE_TIMEOUT_MS=30000
 OPENCLAW_JUDGE_LOG_LEVEL=info
 ```
 
@@ -88,18 +89,30 @@ Legacy `mode/enforcement` config можно оставить для rollback com
 
 ```bash
 openclaw gateway health
-openclaw plugins inspect llm-action-judge --runtime --json
+openclaw plugins inspect --all --runtime --json
 openclaw plugins doctor
 ```
 
 Runtime inspect обязан показать:
 
-- `imported=true`;
-- version `0.4.1`;
-- ровно `before_model_resolve` и `before_tool_call`;
-- `diagnostics=[]`.
+- запись `plugin.id=llm-action-judge` имеет `plugin.imported=true` и
+  `plugin.version=0.4.1`;
+- её runtime `typedHooks` содержит ровно
+  `{"name":"before_model_resolve","priority":-1000}` и
+  `{"name":"before_tool_call","priority":-1000}`;
+- `diagnostics=[]`;
+- полный inventory не содержит params-modifying `before_tool_call`, который
+  исполняется после judge.
 
-Metadata-only inspect не доказывает загрузку hooks.
+Failure регистрации `before_tool_call` теперь abort'ит plugin load. Поэтому
+`imported=true`, `diagnostics=[]` и exact `typedHooks` должны выполняться
+одновременно; одного успешного archive install недостаточно.
+
+Metadata-only inspect не доказывает загрузку hooks. Оба hook judge имеют priority
+`-1000`; независимо от числовой сортировки конкретного host judge должен быть
+единственным либо последним hook, которому разрешено менять `params`. Hook после
+него может только наблюдать или блокировать. Если порядок или mutation contract
+других plugins нельзя доказать, оставьте profile `shadow`.
 
 ## 5. Operational rollout
 
@@ -107,6 +120,11 @@ Metadata-only inspect не доказывает загрузку hooks.
 2. Проверьте latency/failure и secret-safe audit на реальном traffic.
 3. Переключите на `supervised`, если native approval route готов.
 4. `autonomous` включайте только после отдельной operational qualification.
+
+Для strongest isolation включите native OpenClaw sandbox. Плагин разрешает
+benign `exec` без явного `host` после judge/guard, а effective routing такого
+вызова на установке без sandbox может быть gateway. Browser auto-allow, напротив,
+требует literal `target=sandbox` и не полагается на default routing.
 
 После смены profile обновите durable environment service manager/platform,
 выполните rollout/restart и повторите runtime verification.
@@ -122,7 +140,7 @@ openclaw plugins registry --refresh
 openclaw config validate
 openclaw gateway restart
 openclaw gateway health
-openclaw plugins inspect llm-action-judge --runtime --json
+openclaw plugins inspect --all --runtime --json
 ```
 
 Если старая версия подключена через `plugins.load.paths`/`--link`, сначала
@@ -136,8 +154,10 @@ environment service manager/platform, выполните rollout/restart и пр
 health. Shell-local значение для managed service недостаточно.
 
 Затем установите предыдущий проверенный artifact 0.4.0. Он сохраняет public
-ENV/profile, hook, model, policy и strict Structured Output contract, но не
-включает process-local HMAC action commitment и sealed holdout tooling 0.4.1:
+ENV/profile, hooks, fixed model и strict Structured Output transport, но
+откатывает policy с `2026-07-15.1` до `2026-07-14.6` и default judge deadline с
+`30000 ms` до `8000 ms`. В нём также нет process-local HMAC action commitment и
+sealed holdout tooling 0.4.1:
 
 ```bash
 shasum -a 256 -c openclaw-llm-action-judge-0.4.0.tgz.sha256
@@ -146,7 +166,7 @@ openclaw plugins registry --refresh
 openclaw config validate
 openclaw gateway restart
 openclaw gateway health
-openclaw plugins inspect llm-action-judge --runtime --json
+openclaw plugins inspect --all --runtime --json
 ```
 
 Проверьте runtime version `0.4.0`, два hook и `diagnostics=[]`. Rollback не
@@ -165,7 +185,7 @@ openclaw plugins registry --refresh
 openclaw config validate
 openclaw gateway restart
 openclaw gateway health
-openclaw plugins inspect llm-action-judge --runtime --json
+openclaw plugins inspect --all --runtime --json
 ```
 
 ### Further rollback 0.3.0 → 0.2.0
@@ -201,7 +221,11 @@ openclaw gateway health
 - HTTP 401/403: проверьте доступ key к fixed model.
 - timeout: endpoint остаётся fail-closed; сначала проверьте proxy/no_proxy и
   latency, не увеличивайте deadline вслепую.
-- plugin imported, hooks absent: используйте `--runtime`, refresh registry и
-  проверьте `allowConversationAccess`.
+- plugin imported, `typedHooks` отсутствуют: используйте
+  `plugins inspect --all --runtime --json`, refresh registry и проверьте
+  `allowConversationAccess`.
+- после judge есть params-modifying hook: измените порядок/контракт plugins либо
+  оставьте judge в `shadow`; такой composition не поддерживается для
+  enforcement.
 - gateway config invalid: выполните `openclaw doctor`, но сначала сохраните
   backup config и просмотрите предлагаемые изменения.

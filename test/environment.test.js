@@ -251,7 +251,7 @@ test('validates lifecycle log levels and defaults to info', () => {
 });
 
 test('rejects unknown judge variables but ignores unrelated environment', () => {
-  assert.equal(resolve({ environment: { PATH: '/bin', OTHER_API_KEY: 'ordinary' } }).timeoutMs, 8000);
+  assert.equal(resolve({ environment: { PATH: '/bin', OTHER_API_KEY: 'ordinary' } }).timeoutMs, 30000);
   assertInvalid({
     environment: { OPENCLAW_JUDGE_MODEL: 'secret-model-override' },
   }, ['OPENCLAW_JUDGE_MODEL', 'secret-model-override']);

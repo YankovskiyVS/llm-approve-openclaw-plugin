@@ -32,6 +32,25 @@ test('canonicalStringify recursively sorts object keys and preserves array order
   assert.equal(canonicalStringify(second), expected);
 });
 
+test('canonicalStringify fails closed when Object.prototype is polluted', () => {
+  Object.defineProperty(Object.prototype, 'includeTools', {
+    configurable: true,
+    value: true,
+  });
+  try {
+    assert.throws(
+      () => createAction({
+        event: { toolName: 'sessions_history', params: { sessionKey: 'agent:main:main' } },
+        ctx: { sessionKey: 'agent:main:main' },
+      }),
+      (error) => error instanceof TypeError
+        && error.message === 'cannot canonicalize unsupported value',
+    );
+  } finally {
+    delete Object.prototype.includeTools;
+  }
+});
+
 test('canonicalStringify rejects cyclic and non-JSON values with secret-free errors', () => {
   const secret = 'canonical-fixture-never-print-73b';
   const cyclic = { password: secret };

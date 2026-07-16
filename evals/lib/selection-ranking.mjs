@@ -19,6 +19,9 @@ const SUMMARY_KEYS = Object.freeze([
 ]);
 const DENOMINATOR_KEYS = Object.freeze([
   'attempts',
+  'verdict_candidates_received',
+  'schema_valid_verdicts',
+  'must_allow_schema_valid_attempts',
   'cases',
   'must_allow_families',
   'must_block_families',
@@ -43,8 +46,11 @@ const RATE_KEYS = Object.freeze([
   'safe_overblock',
   'auto_allow_precision',
   'failure',
+  'transport_failure',
+  'client_provider_response_failure',
   'schema_invalid',
   'timeout',
+  'safe_attempt_allow_rate_schema_valid',
   'decision_flip',
   'unsafe_allow_flip',
   'common_read_status_recall',
@@ -54,7 +60,11 @@ const BOUND_KEYS = Object.freeze([
   'safe_action_recall_lower_95',
   'common_read_status_recall_lower_95',
 ]);
-const LATENCY_KEYS = Object.freeze(['p50', 'p95', 'p99']);
+const LATENCY_KEYS = Object.freeze([
+  'p50', 'p95', 'p99',
+  'timeout_floor_p95', 'timeout_floor_p99',
+  'timeout_floor_p95_is_lower_bound', 'timeout_floor_p99_is_lower_bound',
+]);
 const USAGE_KEYS = Object.freeze([
   'covered_attempts',
   'prompt_tokens',
@@ -149,7 +159,11 @@ function validateSummary(value) {
   const fields = exactDataValues(value, SUMMARY_KEYS);
   const denominators = exactDataValues(fields.denominators, DENOMINATOR_KEYS);
   for (const key of DENOMINATOR_KEYS) nonNegativeInteger(denominators[key]);
-  if (denominators.attempts === 0 || denominators.attempts !== denominators.cases) invalid();
+  if (denominators.attempts === 0 || denominators.attempts !== denominators.cases
+    || denominators.verdict_candidates_received > denominators.attempts
+    || denominators.schema_valid_verdicts > denominators.verdict_candidates_received
+    || denominators.must_allow_schema_valid_attempts
+      > denominators.schema_valid_verdicts) invalid();
 
   for (const key of [
     'raw_matrix',
@@ -197,16 +211,38 @@ function validateSummary(value) {
     || !sameNumber(rates.safe_action_recall, safeRecall)
     || !sameNumber(rates.safe_overblock, safeOverblock)
     || !sameNumber(rates.common_read_status_recall, commonRecall)
-    || rates.failure === null || rates.schema_invalid === null || rates.timeout === null) invalid();
+    || rates.failure === null
+    || rates.transport_failure === null
+    || rates.client_provider_response_failure === null
+    || rates.timeout === null
+    || (denominators.verdict_candidates_received === 0) !== (rates.schema_invalid === null)
+    || (denominators.must_allow_schema_valid_attempts === 0)
+      !== (rates.safe_attempt_allow_rate_schema_valid === null)) invalid();
 
   const bounds = exactDataValues(fields.bounds, BOUND_KEYS);
   for (const key of BOUND_KEYS) boundedRate(bounds[key]);
 
   const latency = exactDataValues(fields.latency_ms, LATENCY_KEYS);
-  for (const key of LATENCY_KEYS) latency[key] = nonNegativeNumber(latency[key]);
+  for (const key of [
+    'p50', 'p95', 'p99', 'timeout_floor_p95', 'timeout_floor_p99',
+  ]) latency[key] = nonNegativeNumber(latency[key]);
+  for (const key of [
+    'timeout_floor_p95_is_lower_bound', 'timeout_floor_p99_is_lower_bound',
+  ]) {
+    if (typeof latency[key] !== 'boolean') invalid();
+  }
   if ((latency.p95 === null && (latency.p50 !== null || latency.p99 !== null))
     || (latency.p95 !== null && (latency.p50 === null || latency.p99 === null
-      || latency.p50 > latency.p95 || latency.p95 > latency.p99))) invalid();
+      || latency.p50 > latency.p95 || latency.p95 > latency.p99))
+    || (latency.timeout_floor_p95 === null) !== (latency.timeout_floor_p99 === null)
+    || (latency.timeout_floor_p95 !== null
+      && latency.timeout_floor_p95 > latency.timeout_floor_p99)
+    || (latency.timeout_floor_p95 === null
+      && (latency.timeout_floor_p95_is_lower_bound
+        || latency.timeout_floor_p99_is_lower_bound))
+    || latency.timeout_floor_p95_is_lower_bound
+      !== latency.timeout_floor_p99_is_lower_bound
+    || (rates.timeout > 0) !== latency.timeout_floor_p95_is_lower_bound) invalid();
 
   const usage = exactDataValues(fields.usage, USAGE_KEYS);
   for (const key of USAGE_KEYS.slice(0, -1)) nonNegativeInteger(usage[key]);
@@ -219,6 +255,8 @@ function validateSummary(value) {
     common,
     rates,
     p95: latency.p95,
+    timeoutFloorP95: latency.timeout_floor_p95,
+    timeoutFloorP95IsLowerBound: latency.timeout_floor_p95_is_lower_bound,
   };
 }
 
@@ -272,7 +310,7 @@ function compareRows(left, right) {
       -1,
     ),
     compareNumber(left.rates.failure, right.rates.failure),
-    compareNumber(left.rates.schema_invalid, right.rates.schema_invalid),
+    compareNullable(left.rates.schema_invalid, right.rates.schema_invalid, 1),
     compareNumber(left.rates.timeout, right.rates.timeout),
     compareNullable(left.latency_ms.p95, right.latency_ms.p95, 1),
   ]) {
@@ -321,10 +359,17 @@ export function rankSelectionCandidates(input) {
           safe_action_recall: summary.rates.safe_action_recall,
           common_read_status_recall: summary.rates.common_read_status_recall,
           failure: summary.rates.failure,
+          transport_failure: summary.rates.transport_failure,
+          client_provider_response_failure:
+            summary.rates.client_provider_response_failure,
           schema_invalid: summary.rates.schema_invalid,
           timeout: summary.rates.timeout,
         },
-        latency_ms: { p95: summary.p95 },
+        latency_ms: {
+          p95: summary.p95,
+          timeout_floor_p95: summary.timeoutFloorP95,
+          timeout_floor_p95_is_lower_bound: summary.timeoutFloorP95IsLowerBound,
+        },
       };
     });
     rows.sort(compareRows);

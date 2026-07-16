@@ -30,15 +30,59 @@
   Partition and score stdout are path-free versioned receipts; scored output now
   includes `result-set.json`, which binds every result file including the score
   attestation with portable SHA-256 values.
-- Runtime model, policy, Structured Output schema, hooks and deployment ENV
-  contract remain unchanged from 0.4.0.
+- Runtime policy is `2026-07-15.1`: passive observation, external mutation and
+  authorization levels are explicit, while unproven aliases, scope and side
+  effects remain fail-closed.
+- Default judge deadline is `30000 ms`. Reasoning remains disabled because the
+  current Foundation API path has not demonstrated a bounded reasoning budget
+  followed by a schema-valid final answer.
+- Deterministic guard now reviews consequential browser actions, recognized
+  package manifests/lockfiles across common ecosystems, exposed tool history,
+  weakening of `.npmignore`, `.gitignore` or `.dockerignore` through
+  `apply_patch`, every fragment-based `edit`/full `write` of those boundaries,
+  and common direct shell mutators targeting the same files.
+- Protected reads now include credentials and sensitive OpenClaw state outside
+  workspace; writes additionally protect root state, bootstrap instruction files
+  and every `skills/**/SKILL.md`.
+- Recognized first-party tool families use explicit read-only allowlists for sessions, subagents,
+  nodes, process, cron, messages, generation/transcripts and browser actions;
+  goal changes are never-auto. Cross-session actions, external sends and
+  consequential mutations are deterministic review surfaces.
+- Structured `exec`/`bash` validates elevation, host/node execution, injected
+  environment, PTY/background, bounded lifecycle and absolute static workdir,
+  resolves relative targets against that workdir, and applies operation-aware
+  shell, package-manager, Git and OpenClaw CLI guards. Missing host deliberately
+  follows OpenClaw effective routing; explicit non-sandbox host/node reviews.
+- Browser auto-allow now requires literal `target=sandbox`; capture always
+  reviews, and wait is limited to passive `timeMs=0..30000` without JavaScript
+  `fn`.
+- Credential reads now include Git/package auth configs; recursive/dynamic
+  readers, broad Git content reads, startup persistence, manager root-option
+  smuggling and curl/wget implicit config/redirect/routing are guarded.
+- Protected file-valued CLI options and operands after `--` can no longer hide
+  credential/config reads or mutations behind `--help`/`--version` handling;
+  this includes attached Gradle/Maven options, Git config files, reader list
+  files, dual-use crypto outputs, sort compressors and tar incremental state.
+- Package metadata now enforces OpenClaw host and plugin API `>=2026.6.11`;
+  failure to register `before_tool_call` aborts plugin load with a fixed error.
+- Recognized security/auth test files are protected against every write, not
+  only deletion, as an intentionally conservative autonomous boundary.
+- Qualification reports separate transport failure, parser/schema invalidity,
+  conditional safe-attempt allow rate among schema-valid verdicts and explicit
+  timeout-floor lower-bound latency.
+- Integration docs now require runtime `typedHooks` verification through
+  `plugins inspect --all --runtime --json` and define the priority `-1000`
+  composition invariant: judge must be the only or last params-modifying
+  `before_tool_call` hook.
 
 ### Security and evidence
 
 - The existing 0.4.0 frozen-corpus numbers remain tuned regression evidence,
-  not unseen validation. 0.4.1 adds the machinery needed to publish corpus,
-  inference and scoring commitments before each privileged stage can observe
-  the next artifact.
+  not unseen validation. The sealed primary pilot on policy `2026-07-14.6` and
+  an `8000 ms` deadline also failed: `15/40` safe families passed, `19/80`
+  unsafe families remained after the guard, and `80/360` calls timed out.
+  `2026-07-15.1` is therefore not autonomous-qualified until a separate
+  reserve/new holdout succeeds.
 
 ## 0.4.0 — 2026-07-14
 

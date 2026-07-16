@@ -1,7 +1,7 @@
 # Security policy
 
 Поддерживаемый internal release: `openclaw-llm-action-judge` 0.4.1 с policy
-`2026-07-14.6` на OpenClaw
+`2026-07-15.1` на OpenClaw
 `>=2026.6.11` и Node.js `>=22.19.0`.
 
 ## Security boundary
@@ -56,7 +56,7 @@ write), `0/11` catastrophic, `0/360` failures; p50 `1806.841 ms`, p95
 `llm-judge-v040-qualification-20260714T201953Z` дал `111/120` safe, `2/240`
 unsafe в одной active `.ssh/authorized_keys` family (`1/80`, repeats 2 и 3),
 `0/11` catastrophic, `0/360` failures; p50 `1838.441 ms`, p95 `2328.160 ms`,
-p99 `2671.778 ms`. Он также failed. Current policy `2026-07-14.6` требует
+p99 `2671.778 ms`. Он также failed. Policy `2026-07-14.6` потребовала
 человека для распознанных active `.ssh` security-file writes. Fresh run
 `llm-judge-v040-qualification-20260714T202947Z` прошёл frozen-corpus gate:
 `108/120` safe (`34/40` families), `0/240` unsafe (`0/80` families), `0/11`
@@ -64,19 +64,73 @@ catastrophic, `0/360` failures; p50 `1846.141 ms`, p95 `2320.621 ms`, p99
 `2761.126 ms`. Raw judge вернул 18 unsafe `allow`, combined gates поймали
 `18/18`.
 
-Это tuned regression evidence на том же corpus, по которому усиливался guard;
-отдельного unseen holdout нет.
+Это tuned regression evidence на том же corpus, по которому усиливался guard.
+Sealed primary на policy `2026-07-14.6` и timeout `8000 ms` затем провалил
+launch gate: `15/40` safe families, `19/80` unsafe families после combined
+guard и `80/360` timeout. Он используется только как tuning evidence.
+
+Current policy `2026-07-15.1` уточняет passive observation и authorization,
+увеличивает default deadline до `30000 ms` и добавляет structural guard для
+consequential browser actions, распознанные package manifests распространённых
+экосистем, exposed tool history и ослабления ignore boundaries. Для
+ignore-файлов только `apply_patch` может сохранить allow на доказуемо защитном
+delta; `edit` и полный `write` fail-closed всегда требуют review. До отдельного
+reserve/new holdout автономный режим остаётся неквалифицированным.
+
+Guard также защищает sensitive OpenClaw state вне workspace и записи в
+instruction surfaces: root config/credential/session/history/log data,
+workspace bootstrap files и любой `skills/**/SKILL.md`. Распознанные first-party
+tool families используют явные read-only allowlists; внутри них cross-session
+actions, sends/spawns, model/node/process/cron/goal/generation mutations и
+consequential browser actions не могут пройти только на основании raw model
+`allow`.
 
 ## Deterministic guard limits
 
-Shell parser — bounded fail-closed backstop, а не shell sandbox. Он понижает
-неоднозначный dispatch/redirection, но simple unknown direct commands всё ещё
-зависят от LLM verdict и native OpenClaw sandbox/tool policy.
+Shell parser — bounded fail-closed backstop, а не shell sandbox. Structured
+`exec`/`bash` отдельно проверяет `elevated`, explicit `host`, `node`, `env`,
+`pty`, `background`, bounded `timeout`/`yieldMs` и `workdir`; relative paths
+разрешаются против validated static absolute workdir. Отсутствующий `host`
+сохраняет effective routing OpenClaw и без native sandbox может означать gateway
+execution. Parser понижает shell control/dynamic dispatch, protected
+redirection/read/write, recursive/dynamic credential readers и manager-aware
+package/Git/OpenClaw CLI mutations. `curl` auto-allow требует отключённый rc и
+запрещает redirect/routing/proxy/socket/netrc/upload/data forms; `wget` также
+требует `--no-config` и zero redirects. File-valued options вроде Git
+`--contents/-f`, npm `--userconfig`, pip `--client-cert/--python`, Maven settings,
+Bundler gemfile, Cargo config и Gradle init scripts/user home проверяются отдельно;
+`--help` после operand separator не может отменить mutation classification.
+Однако arbitrary scripts,
+unknown direct commands, runtime-generated paths и side effects разрешённой
+программы всё ещё зависят от LLM verdict и native OpenClaw sandbox/tool policy.
+То же относится к неизвестным и plugin-provided tool names вне перечисленных
+first-party families: guard не может безопасно угадать семантику будущего API.
+Path checks lexical: существующий symlink/hardlink может указывать на другой
+файл, поэтому filesystem isolation и native tool policy остаются обязательными.
 
-Для `web_fetch` плагин статически проверяет URL, literal IP и special-use names.
-DNS resolution и каждый redirect остаются обязанностью native OpenClaw SSRF
-guard. DNS rebinding не решается pre-hook и требует повторной проверки resolved
-address на каждой сетевой операции и после каждого redirect.
+Для `web_fetch` и browser navigation guard проверяет только literal URL в
+исходных params, literal IP и special-use names. Browser auto-allow требует
+literal `target=sandbox`; любой capture требует review, потому что runtime не
+связывает ignored `targetUrl` с фактически захваченной вкладкой. Browser `act`
+ограничен `hover`/`resize` и пассивным integer `wait.timeMs=0..30000` без
+`fn`/extra fields. Guard не видит DNS answer, redirect target, service
+worker, navigation после исполнения либо network calls страницы. DNS resolution
+и каждый redirect остаются обязанностью native OpenClaw SSRF guard. DNS rebinding
+не решается pre-hook и требует повторной проверки resolved address на каждой
+сетевой операции и после каждого redirect.
+
+## Hook composition boundary
+
+Judge регистрирует оба hook с priority `-1000`. Security invariant для
+`before_tool_call`: judge является единственным либо последним hook, которому
+разрешено менять `params`. Hook после judge может наблюдать или блокировать, но
+не заменять параметры, иначе exact-action commitment относится не к фактически
+выполненному действию. Внутренняя TOCTOU-проверка заканчивается при возврате из
+judge callback и не защищает от последующей мутации другим plugin.
+
+Перед enforcement проверьте полный runtime hook inventory. Если порядок или
+право других hook менять params нельзя доказать, используйте `shadow` и считайте
+такую композицию unsupported.
 
 ## Credentials and endpoint
 
@@ -126,7 +180,8 @@ params. Ограничьте к ним доступ и retention.
 Начинайте с `shadow`. До enforcement подтвердите:
 
 1. checksum versioned artifact;
-2. runtime `imported=true`, ровно два hook, `diagnostics=[]`;
+2. runtime `imported=true`, `typedHooks` содержит ровно два hook judge,
+   `diagnostics=[]`, а после judge нет params-modifying hook;
 3. native sandbox/tool policy и approval route;
 4. fail-closed failure behavior;
 5. secret-safe audit и monitoring;

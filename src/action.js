@@ -1,5 +1,6 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { POLICY_VERSION } from './constants.js';
+import { objectPrototypeIsPristine } from './intrinsics.js';
 import { redactForJudge } from './redact.js';
 
 const ACTION_HASH_KEY = randomBytes(32);
@@ -12,7 +13,8 @@ const CANONICAL_ERROR_MESSAGES = new Set([
 function isPlainObject(value) {
   if (value === null || typeof value !== 'object') return false;
   const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+  return prototype === null
+    || prototype === Object.prototype && objectPrototypeIsPristine();
 }
 
 function unsupported() {
