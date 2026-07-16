@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   createApprovalDescription,
   createBlockFeedback,
+  feedbackRequiresBlock,
   selectFeedbackCode,
+  selectFeedbackOutcome,
 } from '../src/feedback.js';
 
 const MODEL_CODES = Object.freeze({
@@ -65,6 +67,24 @@ test('createApprovalDescription is fixed, bounded, and derived from the selected
   }
 });
 
+test('only non-overridable host codes require unconditional blocking', () => {
+  assert.equal(feedbackRequiresBlock('hard_policy_block'), true);
+  assert.equal(feedbackRequiresBlock('repeated_denials'), true);
+  for (const code of [...Object.keys(ALL_CODES), 'safe_and_authorized', 'unknown']) {
+    if (code === 'hard_policy_block' || code === 'repeated_denials') continue;
+    assert.equal(feedbackRequiresBlock(code), false);
+  }
+  let traps = 0;
+  const hostile = new Proxy({}, {
+    get() {
+      traps += 1;
+      throw new Error(SENTINEL);
+    },
+  });
+  assert.equal(feedbackRequiresBlock(hostile), false);
+  assert.equal(traps, 0);
+});
+
 test('unknown, safe, malformed, prototype, accessor, and proxy inputs use the invalid fallback', () => {
   const fallback = createBlockFeedback('invalid_judge_response');
   const fallbackApproval = createApprovalDescription('invalid_judge_response');
@@ -115,6 +135,9 @@ test('selectFeedbackCode maps validated outcomes without reading raw sentinels',
   const verdict = (reasonCode) => ({ reason_code: reasonCode, rationale: SENTINEL });
   const cases = [
     [{ kind: 'allow', verdict: verdict('safe_and_authorized') }, null],
+    [{ kind: 'allow', feedback_code: 'hard_policy_block' }, 'hard_policy_block'],
+    [{ kind: 'allow', feedback_code: 'repeated_denials' }, 'repeated_denials'],
+    [{ kind: 'allow', feedback_code: 'local_policy_review' }, 'local_policy_review'],
     [{ kind: 'deny', verdict: verdict('out_of_scope') }, 'out_of_scope'],
     [{ kind: 'review', verdict: verdict('authorization_missing') }, 'authorization_missing'],
     [{ kind: 'review', verdict: { decision: 'allow', reason_code: 'safe_and_authorized' } }, 'local_policy_review'],
@@ -158,4 +181,24 @@ test('selectFeedbackCode treats hostile result and verdict shapes as invalid wit
     assert.equal(selectFeedbackCode(result), 'invalid_judge_response');
   }
   assert.equal(traps, 0);
+});
+
+test('selectFeedbackOutcome mirrors the fail-closed mapper semantics', () => {
+  assert.equal(selectFeedbackOutcome({ kind: 'allow' }), 'allow');
+  assert.equal(selectFeedbackOutcome({
+    kind: 'allow',
+    feedback_code: 'hard_policy_block',
+  }), 'deny');
+  assert.equal(selectFeedbackOutcome({
+    kind: 'allow',
+    feedback_code: 'repeated_denials',
+  }), 'deny');
+  assert.equal(selectFeedbackOutcome({
+    kind: 'allow',
+    feedback_code: 'local_policy_review',
+  }), 'deny');
+  assert.equal(selectFeedbackOutcome({ kind: 'review' }), 'review');
+  assert.equal(selectFeedbackOutcome({ kind: 'deny' }), 'deny');
+  assert.equal(selectFeedbackOutcome({ kind: 'failure' }), 'failure');
+  assert.equal(selectFeedbackOutcome({ kind: 'unknown' }), 'failure');
 });

@@ -11,6 +11,7 @@ import { createContextStore } from './context-store.js';
 import {
   createApprovalDescription,
   createBlockFeedback,
+  feedbackRequiresBlock,
   selectFeedbackCode,
 } from './feedback.js';
 import {
@@ -27,7 +28,10 @@ import {
   validateJudgeVerdict,
 } from './judge-schema.js';
 import { createJudgeClient } from './judge-client.js';
-import { objectPrototypeIsPristine } from './intrinsics.js';
+import {
+  arrayPrototypeIsPristine,
+  objectPrototypeIsPristine,
+} from './intrinsics.js';
 
 const PLUGIN_NAME = 'LLM Action Judge';
 const PLUGIN_DESCRIPTION = 'LLM-gated tool-call approval for OpenClaw';
@@ -42,6 +46,15 @@ const LOG_LEVEL_RANK = Object.freeze({ silent: -1, error: 0, warn: 1, info: 2 })
 const OUTCOMES = new Set(JUDGE_DECISIONS);
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 const VERDICT_KEY_SET = new Set(JUDGE_VERDICT_KEYS);
+const ARRAY_IS_ARRAY = Array.isArray;
+const ARRAY_PROTOTYPE = Array.prototype;
+const OBJECT_PROTOTYPE = Object.prototype;
+const GET_PROTOTYPE_OF = Object.getPrototypeOf;
+const SET_PROTOTYPE_OF = Object.setPrototypeOf;
+const GET_OWN_PROPERTY_DESCRIPTOR = Object.getOwnPropertyDescriptor;
+const HAS_OWN = Object.hasOwn;
+const REFLECT_OWN_KEYS = Reflect.ownKeys;
+const CREATE_OBJECT = Object.create;
 
 function readData(source, key) {
   try {
@@ -144,36 +157,52 @@ function plainParams(action) {
   return params.value;
 }
 
-function detachInheritedParams(value, ancestors = new Set()) {
-  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return true;
-  if (typeof value !== 'object' || utilTypes.isProxy(value) || ancestors.has(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  if (Array.isArray(value)) {
-    if (prototype !== Array.prototype && prototype !== null) return false;
-  } else {
-    if (prototype !== Object.prototype && prototype !== null) return false;
-    Object.setPrototypeOf(value, null);
+function detachInheritedParams(value, ancestors) {
+  let lineage = ancestors;
+  if (lineage === undefined) {
+    lineage = [];
+    SET_PROTOTYPE_OF(lineage, null);
   }
-  ancestors.add(value);
+  const valueType = typeof value;
+  if (value === null
+    || valueType === 'string'
+    || valueType === 'number'
+    || valueType === 'boolean') return true;
+  if (typeof value !== 'object' || utilTypes.isProxy(value)) return false;
+  for (let index = 0; index < lineage.length; index += 1) {
+    if (lineage[index] === value) return false;
+  }
+  const prototype = GET_PROTOTYPE_OF(value);
+  if (ARRAY_IS_ARRAY(value)) {
+    if (prototype !== ARRAY_PROTOTYPE && prototype !== null) return false;
+    SET_PROTOTYPE_OF(value, null);
+  } else {
+    if (prototype !== OBJECT_PROTOTYPE && prototype !== null) return false;
+    SET_PROTOTYPE_OF(value, null);
+  }
+  lineage[lineage.length] = value;
   try {
-    for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== 'string' || key === 'length') continue;
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor || !Object.hasOwn(descriptor, 'value')
-        || !detachInheritedParams(descriptor.value, ancestors)) return false;
+    const keys = REFLECT_OWN_KEYS(value);
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index];
+      if (typeof key !== 'string') return false;
+      if (key === 'length') continue;
+      const descriptor = GET_OWN_PROPERTY_DESCRIPTOR(value, key);
+      if (!descriptor || !HAS_OWN(descriptor, 'value')
+        || !detachInheritedParams(descriptor.value, lineage)) return false;
     }
     return true;
   } finally {
-    ancestors.delete(value);
+    lineage.length -= 1;
   }
 }
 
 function safeParamsAfterPrototypePollution(params) {
-  if (objectPrototypeIsPristine()) return params;
+  if (objectPrototypeIsPristine() && arrayPrototypeIsPristine()) return params;
   try {
-    return detachInheritedParams(params) ? params : Object.create(null);
+    return detachInheritedParams(params) ? params : CREATE_OBJECT(null);
   } catch {
-    return Object.create(null);
+    return CREATE_OBJECT(null);
   }
 }
 
@@ -194,6 +223,14 @@ function safeLatency(value) {
 
 function failure(feedbackCode = 'invalid_judge_response') {
   return { kind: 'failure', reason: FAILURE_REASON, feedback_code: feedbackCode };
+}
+
+function clientFailureCode(reviewed) {
+  const reason = readData(reviewed, 'reason');
+  return reason.ok
+    && (reason.value === 'invalid judge request' || reason.value === 'invalid judge response')
+    ? 'invalid_judge_response'
+    : 'judge_unavailable';
 }
 
 function getStoredPrompt(store, runId) {
@@ -261,9 +298,11 @@ function normalizedSnapshot(value, verdict) {
 
 function safeFallbackMapping(config, result, params) {
   if (config.enforcement === 'shadow') return undefined;
-  if (result.kind === 'allow') return { params };
   const feedbackCode = selectFeedbackCode(result);
-  if (result.kind === 'deny') {
+  if (result.kind === 'allow' && feedbackCode === null) return { params };
+  if (result.kind === 'allow'
+    || result.kind === 'deny'
+    || feedbackRequiresBlock(feedbackCode)) {
     return { block: true, blockReason: createBlockFeedback(feedbackCode) };
   }
   if (config.mode === 'supervised') {
@@ -492,7 +531,9 @@ export function createActionJudgePlugin(deps = {}) {
                 const latency = readData(reviewed, 'latencyMs');
                 latencyMs = safeLatency(latency.ok ? latency.value : undefined);
                 if (!ok.ok || ok.value !== true) {
-                  result = failure('judge_unavailable');
+                  result = failure(ok.ok && ok.value === false
+                    ? clientFailureCode(reviewed)
+                    : 'invalid_judge_response');
                 } else {
                   const text = readData(reviewed, 'text');
                   if (text.ok && typeof text.value === 'string' && typeof parse === 'function') {
@@ -560,27 +601,6 @@ export function createActionJudgePlugin(deps = {}) {
           mode: config.mode,
           enforcement: config.enforcement,
         });
-        if (result.kind === 'allow') {
-          try {
-            const finalIdentity = identitySnapshot(event, ctx);
-            const finalAction = createAction({ event, ctx });
-            const finalEnvelope = createJudgeEnvelope(finalAction);
-            const finalHash = readData(finalEnvelope, 'action_hash');
-            const finalParams = plainParams(finalAction);
-            if (!finalIdentity.ok
-              || !actionMatchesIdentity(finalAction, finalIdentity)
-              || !finalHash.ok
-              || finalHash.value !== expectedHash
-              || finalParams === null) {
-              result = failure();
-            } else {
-              action = finalAction;
-              params = finalParams;
-            }
-          } catch {
-            result = failure();
-          }
-        }
         params = safeParamsAfterPrototypePollution(params);
         return mapSafely(config, result, params);
       } catch {

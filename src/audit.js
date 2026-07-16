@@ -9,7 +9,9 @@ import { JUDGE_REASON_CODES } from './judge-schema.js';
 import {
   FEEDBACK_CODES,
   FEEDBACK_STATUSES,
+  feedbackRequiresBlock,
   selectFeedbackCode,
+  selectFeedbackOutcome,
 } from './feedback.js';
 
 const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
@@ -22,6 +24,9 @@ const MODES = new Set(['autonomous', 'supervised']);
 const ENFORCEMENTS = new Set(['shadow', 'enforce']);
 const CLOSED_FEEDBACK_CODES = new Set(FEEDBACK_CODES);
 const CLOSED_FEEDBACK_STATUSES = new Set(FEEDBACK_STATUSES);
+const MODEL_FEEDBACK_CODES = new Set(
+  JUDGE_REASON_CODES.filter((code) => code !== 'safe_and_authorized'),
+);
 const OMITTED_RATIONALE = '[model rationale omitted]';
 const WRITE_FAILED_MESSAGE = 'LLM action judge audit write failed';
 const INVALID_WRITER_OPTIONS = 'invalid audit writer options';
@@ -145,17 +150,44 @@ function judgeVerdict(judgeResult) {
   return nested !== null && typeof nested === 'object' ? nested : judgeResult;
 }
 
-function feedbackMetadata(normalized, mode, enforcement) {
+function feedbackMetadata(normalized, outcome, mode, enforcement) {
   if (enforcement !== 'enforce') return { code: null, status: null };
-  const kind = ownDataValue(normalized, 'kind');
-  if (kind === 'allow') return { code: null, status: null };
-  if (!['deny', 'review', 'failure'].includes(kind)) return { code: null, status: null };
+  if (outcome === 'allow') return { code: null, status: null };
+  if (outcome !== 'deny' && outcome !== 'review' && outcome !== 'failure') {
+    return { code: null, status: null };
+  }
   const code = selectFeedbackCode(normalized);
   if (!CLOSED_FEEDBACK_CODES.has(code)) return { code: null, status: null };
-  if (kind === 'deny') return { code, status: 'blocked' };
+  if (outcome === 'deny' || feedbackRequiresBlock(code)) return { code, status: 'blocked' };
   if (mode === 'autonomous') return { code, status: 'blocked' };
   if (mode === 'supervised') return { code, status: 'approval_required' };
   return { code: null, status: null };
+}
+
+function sanitizeFeedbackMetadata(code, status, outcome, mode, enforcement) {
+  if (enforcement !== 'enforce' || outcome === 'allow') return { code: null, status: null };
+  if (!CLOSED_FEEDBACK_CODES.has(code) || !CLOSED_FEEDBACK_STATUSES.has(status)) {
+    return { code: null, status: null };
+  }
+  const codeMatchesOutcome = outcome === 'deny'
+    || (feedbackRequiresBlock(code)
+      ? outcome === 'review' || outcome === 'failure'
+      : code === 'local_policy_review'
+        ? outcome === 'review'
+        : code === 'judge_unavailable' || code === 'invalid_judge_response'
+          ? outcome === 'failure'
+          : MODEL_FEEDBACK_CODES.has(code) && outcome === 'review');
+  if (!codeMatchesOutcome) return { code: null, status: null };
+  let expectedStatus = null;
+  if (outcome === 'deny' || feedbackRequiresBlock(code)) {
+    expectedStatus = 'blocked';
+  } else if (outcome === 'review' || outcome === 'failure') {
+    if (mode === 'autonomous') expectedStatus = 'blocked';
+    if (mode === 'supervised') expectedStatus = 'approval_required';
+  }
+  return status === expectedStatus
+    ? { code, status }
+    : { code: null, status: null };
 }
 
 export function buildAuditEvent(input = {}) {
@@ -184,11 +216,16 @@ export function buildAuditEvent(input = {}) {
     );
     event.confidence = validConfidence(ownDataValue(judgeResult, 'confidence'));
     event.reason_code = validEnum(ownDataValue(judgeResult, 'reason_code'), REASON_CODES);
-    event.outcome = validEnum(ownDataValue(normalized, 'kind'), OUTCOMES) ?? 'failure';
+    event.outcome = validEnum(selectFeedbackOutcome(normalized), OUTCOMES) ?? 'failure';
     event.latency_ms = validLatency(ownDataValue(input, 'latencyMs'));
     event.mode = validEnum(ownDataValue(input, 'mode'), MODES);
     event.enforcement = validEnum(ownDataValue(input, 'enforcement'), ENFORCEMENTS);
-    const feedback = feedbackMetadata(normalized, event.mode, event.enforcement);
+    const feedback = feedbackMetadata(
+      normalized,
+      event.outcome,
+      event.mode,
+      event.enforcement,
+    );
     event.feedback_code = feedback.code;
     event.feedback_status = feedback.status;
     event.rationale = rationaleIndicator(ownDataValue(judgeResult, 'rationale'));
@@ -224,14 +261,23 @@ function sanitizeAuditEvent(input) {
   event.latency_ms = validLatency(ownDataValue(input, 'latency_ms'));
   event.mode = validEnum(ownDataValue(input, 'mode'), MODES);
   event.enforcement = validEnum(ownDataValue(input, 'enforcement'), ENFORCEMENTS);
-  event.feedback_code = validEnum(
+  const feedbackCode = validEnum(
     ownDataValue(input, 'feedback_code'),
     CLOSED_FEEDBACK_CODES,
   );
-  event.feedback_status = validEnum(
+  const feedbackStatus = validEnum(
     ownDataValue(input, 'feedback_status'),
     CLOSED_FEEDBACK_STATUSES,
   );
+  const feedback = sanitizeFeedbackMetadata(
+    feedbackCode,
+    feedbackStatus,
+    event.outcome,
+    event.mode,
+    event.enforcement,
+  );
+  event.feedback_code = feedback.code;
+  event.feedback_status = feedback.status;
   event.rationale = rationaleIndicator(ownDataValue(input, 'rationale'));
   return event;
 }

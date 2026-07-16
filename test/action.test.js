@@ -51,6 +51,27 @@ test('canonicalStringify fails closed when Object.prototype is polluted', () => 
   }
 });
 
+test('canonicalStringify fails closed when Array.prototype is polluted', () => {
+  Object.defineProperty(Array.prototype, 'toJSON', {
+    configurable: true,
+    value() {
+      return ['attacker-replaced'];
+    },
+  });
+  try {
+    assert.throws(
+      () => createAction({
+        event: { toolName: 'read', params: { targets: ['reviewed-safe-target'] } },
+        ctx: {},
+      }),
+      (error) => error instanceof TypeError
+        && error.message === 'cannot canonicalize unsupported value',
+    );
+  } finally {
+    delete Array.prototype.toJSON;
+  }
+});
+
 test('canonicalStringify rejects cyclic and non-JSON values with secret-free errors', () => {
   const secret = 'canonical-fixture-never-print-73b';
   const cyclic = { password: secret };

@@ -433,6 +433,18 @@ test('audit records only closed feedback code and status metadata for enforced o
       mode: 'supervised',
       enforcement: 'enforce',
     }, 'local_policy_review', 'approval_required'],
+    [{
+      judgeResult: undefined,
+      normalized: { kind: 'review', feedback_code: 'hard_policy_block' },
+      mode: 'supervised',
+      enforcement: 'enforce',
+    }, 'hard_policy_block', 'blocked'],
+    [{
+      judgeResult: undefined,
+      normalized: { kind: 'failure', feedback_code: 'repeated_denials' },
+      mode: 'supervised',
+      enforcement: 'enforce',
+    }, 'repeated_denials', 'blocked'],
   ];
 
   for (const [input, feedbackCode, feedbackStatus] of cases) {
@@ -477,6 +489,26 @@ test('audit keeps feedback metadata null for allow and shadow outcomes', () => {
     const event = buildAuditEvent({ action: makeAction(), latencyMs: 1, ...input });
     assert.equal(event.feedback_code, null);
     assert.equal(event.feedback_status, null);
+  }
+});
+
+test('audit mirrors the fail-closed mapper for contradictory allow host codes', () => {
+  for (const feedbackCode of [
+    'hard_policy_block',
+    'local_policy_review',
+    'judge_unavailable',
+    'invalid_judge_response',
+    'repeated_denials',
+  ]) {
+    const event = buildAuditEvent({
+      action: makeAction(),
+      normalized: { kind: 'allow', feedback_code: feedbackCode },
+      mode: 'supervised',
+      enforcement: 'enforce',
+    });
+    assert.equal(event.outcome, 'deny');
+    assert.equal(event.feedback_code, feedbackCode);
+    assert.equal(event.feedback_status, 'blocked');
   }
 });
 
@@ -563,6 +595,127 @@ test('writer re-applies the whitelist to malicious caller-supplied audit fields'
   ]) {
     assert.equal(Object.hasOwn(parsed, key), false, `writer accepted forbidden key ${key}`);
   }
+});
+
+test('writer removes enum-valid feedback metadata that contradicts delivery semantics', async (t) => {
+  const { filePath } = await tempAudit(t);
+  const writer = createAuditWriter({ filePath });
+  const contradictory = [
+    {
+      outcome: 'allow',
+      mode: 'autonomous',
+      enforcement: 'enforce',
+      feedback_code: 'hard_policy_block',
+      feedback_status: 'blocked',
+    },
+    {
+      outcome: 'deny',
+      mode: 'supervised',
+      enforcement: 'shadow',
+      feedback_code: 'out_of_scope',
+      feedback_status: 'blocked',
+    },
+    {
+      outcome: 'deny',
+      mode: 'supervised',
+      enforcement: 'enforce',
+      feedback_code: 'out_of_scope',
+      feedback_status: 'approval_required',
+    },
+    {
+      outcome: 'review',
+      mode: 'autonomous',
+      enforcement: 'enforce',
+      feedback_code: 'authorization_missing',
+      feedback_status: 'approval_required',
+    },
+    {
+      outcome: 'failure',
+      mode: 'supervised',
+      enforcement: 'enforce',
+      feedback_code: 'judge_unavailable',
+      feedback_status: 'blocked',
+    },
+    {
+      outcome: 'failure',
+      mode: 'supervised',
+      enforcement: 'enforce',
+      feedback_code: 'out_of_scope',
+      feedback_status: 'approval_required',
+    },
+    {
+      outcome: 'review',
+      mode: 'supervised',
+      enforcement: 'enforce',
+      feedback_code: 'judge_unavailable',
+      feedback_status: 'approval_required',
+    },
+    {
+      outcome: 'deny',
+      mode: 'autonomous',
+      enforcement: 'enforce',
+      feedback_code: null,
+      feedback_status: 'blocked',
+    },
+  ];
+
+  for (const input of contradictory) {
+    assert.equal(await writer.write({
+      ...buildAuditEvent(),
+      ...input,
+    }), true);
+  }
+
+  const events = (await fs.readFile(filePath, 'utf8'))
+    .trimEnd()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert.equal(events.length, contradictory.length);
+  for (const event of events) {
+    assert.equal(event.feedback_code, null);
+    assert.equal(event.feedback_status, null);
+  }
+});
+
+test('writer preserves only semantically compatible feedback metadata', async (t) => {
+  const { filePath } = await tempAudit(t);
+  const writer = createAuditWriter({ filePath });
+  const valid = [
+    ['deny', 'supervised', 'out_of_scope', 'blocked'],
+    ['review', 'autonomous', 'authorization_missing', 'blocked'],
+    ['failure', 'supervised', 'judge_unavailable', 'approval_required'],
+    ['deny', 'autonomous', 'local_policy_review', 'blocked'],
+    ['deny', 'autonomous', 'judge_unavailable', 'blocked'],
+    ['deny', 'autonomous', 'invalid_judge_response', 'blocked'],
+    ['review', 'supervised', 'hard_policy_block', 'blocked'],
+    ['failure', 'supervised', 'repeated_denials', 'blocked'],
+  ];
+
+  for (const [outcome, mode, feedbackCode, feedbackStatus] of valid) {
+    assert.equal(await writer.write({
+      ...buildAuditEvent(),
+      outcome,
+      mode,
+      enforcement: 'enforce',
+      feedback_code: feedbackCode,
+      feedback_status: feedbackStatus,
+    }), true);
+  }
+
+  const events = (await fs.readFile(filePath, 'utf8'))
+    .trimEnd()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert.deepEqual(events.map((event) => [event.feedback_code, event.feedback_status]), [
+    ['out_of_scope', 'blocked'],
+    ['authorization_missing', 'blocked'],
+    ['judge_unavailable', 'approval_required'],
+    ['local_policy_review', 'blocked'],
+    ['judge_unavailable', 'blocked'],
+    ['invalid_judge_response', 'blocked'],
+    ['hard_policy_block', 'blocked'],
+    ['repeated_denials', 'blocked'],
+  ]);
 });
 
 test('concurrent writes use independent handles and preserve one JSON object per line', async (t) => {

@@ -1,6 +1,9 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { POLICY_VERSION } from './constants.js';
-import { objectPrototypeIsPristine } from './intrinsics.js';
+import {
+  arrayPrototypeIsPristine,
+  objectPrototypeIsPristine,
+} from './intrinsics.js';
 import { redactForJudge } from './redact.js';
 
 const ACTION_HASH_KEY = randomBytes(32);
@@ -34,6 +37,9 @@ function canonicalize(value, ancestors) {
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== null
+        && (prototype !== Array.prototype || !arrayPrototypeIsPristine())) return unsupported();
       if (Object.getOwnPropertySymbols(value).length > 0) return unsupported();
       if (Object.getOwnPropertyNames(value).length !== value.length + 1) return unsupported();
 

@@ -3103,6 +3103,22 @@ test('mapVerdict sends explicit deny feedback to blockReason in both modes', () 
   }
 });
 
+test('mapVerdict never routes non-overridable host feedback to human approval', () => {
+  for (const code of ['hard_policy_block', 'repeated_denials']) {
+    for (const kind of ['allow', 'review', 'failure']) {
+      assert.deepEqual(mapVerdict({
+        mode: 'supervised',
+        enforcement: 'enforce',
+        result: { kind, feedback_code: code },
+        params: { path: '/tmp/safe-fixture' },
+      }), {
+        block: true,
+        blockReason: createBlockFeedback(code),
+      });
+    }
+  }
+});
+
 test('mapVerdict maps every autonomous non-allow outcome to safe block feedback', () => {
   for (const [result, code] of [
     [{

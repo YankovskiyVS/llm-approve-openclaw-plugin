@@ -771,6 +771,160 @@ test('audit cannot pollute Object.prototype after the final allow check', async 
   }
 });
 
+test('audit side effects cannot create a delivered-outcome mismatch or inherited params', async () => {
+  let audited;
+  const audit = {
+    async write(event) {
+      audited = event;
+      Object.defineProperty(Object.prototype, 'auditInjectedValue', {
+        configurable: true,
+        value: PROMPT_SECRET,
+      });
+      Object.defineProperty(Array.prototype, 'auditInjectedArrayValue', {
+        configurable: true,
+        value: PROMPT_SECRET,
+      });
+      Object.defineProperty(Array.prototype, 'toJSON', {
+        configurable: true,
+        value() {
+          return ['attacker-replaced-after-judge'];
+        },
+      });
+    },
+  };
+  const harness = setup({
+    audit,
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+  });
+  capturePrompt(harness);
+  const call = callData('run-1', {
+    path: '/tmp/status',
+    nested: { ok: true },
+    items: [{ safe: true }],
+  });
+
+  let result;
+  let inheritedObjectValue;
+  let inheritedArrayValue;
+  let serializedItems;
+  try {
+    result = await harness.beforeTool(call.event, call.ctx);
+    inheritedObjectValue = result.params.auditInjectedValue;
+    inheritedArrayValue = result.params.items.auditInjectedArrayValue;
+    serializedItems = JSON.stringify(result.params.items);
+  } finally {
+    delete Object.prototype.auditInjectedValue;
+    delete Array.prototype.auditInjectedArrayValue;
+    delete Array.prototype.toJSON;
+  }
+
+  assert.equal(audited.outcome, 'allow');
+  assert.equal(audited.feedback_code, null);
+  assert.equal(audited.feedback_status, null);
+  assert.equal(Object.hasOwn(result, 'block'), false);
+  assert.equal(result.params.path, '/tmp/status');
+  assert.equal(result.params.nested.ok, true);
+  assert.equal(result.params.items[0].safe, true);
+  assert.equal(inheritedObjectValue, undefined);
+  assert.equal(inheritedArrayValue, undefined);
+  assert.equal(serializedItems, '[{"safe":true}]');
+  assert.equal(Object.hasOwn(result.params, 'auditInjectedValue'), false);
+  assert.equal(Object.hasOwn(result.params.nested, 'auditInjectedValue'), false);
+  assert.equal(Object.hasOwn(result.params.items, 'auditInjectedArrayValue'), false);
+});
+
+test('audit cannot attach approved arrays to a replaced Array.prototype chain', async () => {
+  const originalPrototype = Object.getPrototypeOf(Array.prototype);
+  const maliciousPrototype = Object.create(originalPrototype, {
+    auditInjectedChainValue: {
+      configurable: true,
+      value: PROMPT_SECRET,
+    },
+  });
+  let audited;
+  const audit = {
+    async write(event) {
+      audited = event;
+      Object.setPrototypeOf(Array.prototype, maliciousPrototype);
+    },
+  };
+  const harness = setup({
+    audit,
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+  });
+  capturePrompt(harness);
+  const call = callData('run-1', {
+    path: '/tmp/status',
+    items: ['reviewed-safe-target'],
+  });
+
+  let result;
+  let inheritedValue;
+  try {
+    result = await harness.beforeTool(call.event, call.ctx);
+    inheritedValue = result.params.items.auditInjectedChainValue;
+  } finally {
+    Object.setPrototypeOf(Array.prototype, originalPrototype);
+  }
+
+  assert.equal(audited.outcome, 'allow');
+  assert.equal(Object.hasOwn(result, 'block'), false);
+  assert.equal(inheritedValue, undefined);
+  assert.equal(JSON.stringify(result.params.items), '["reviewed-safe-target"]');
+});
+
+test('audit cannot bypass recursive detachment through a replaced array iterator', async () => {
+  const iteratorDescriptor = Object.getOwnPropertyDescriptor(
+    Array.prototype,
+    Symbol.iterator,
+  );
+  const audit = {
+    async write() {
+      Object.defineProperty(Object.prototype, 'auditIteratorInjectedValue', {
+        configurable: true,
+        value: PROMPT_SECRET,
+      });
+      Object.defineProperty(Array.prototype, Symbol.iterator, {
+        configurable: true,
+        writable: true,
+        value() {
+          return {
+            next() { return { done: true, value: undefined }; },
+          };
+        },
+      });
+    },
+  };
+  const harness = setup({
+    audit,
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+  });
+  capturePrompt(harness);
+  const call = callData('run-1', {
+    path: '/tmp/status',
+    nested: { safe: true },
+    items: [{ safe: true }],
+  });
+
+  let result;
+  let inheritedNested;
+  let inheritedItems;
+  try {
+    result = await harness.beforeTool(call.event, call.ctx);
+    inheritedNested = result.params.nested.auditIteratorInjectedValue;
+    inheritedItems = result.params.items.auditIteratorInjectedValue;
+  } finally {
+    delete Object.prototype.auditIteratorInjectedValue;
+    Object.defineProperty(Array.prototype, Symbol.iterator, iteratorDescriptor);
+  }
+
+  assert.equal(Object.hasOwn(result, 'block'), false);
+  assert.equal(result.params.nested.safe, true);
+  assert.equal(result.params.items[0].safe, true);
+  assert.equal(inheritedNested, undefined);
+  assert.equal(inheritedItems, undefined);
+});
+
 test('a credential-redacted action can never be auto-approved by an allow verdict', async () => {
   const client = verdictClient();
   const harness = setup({ client });
@@ -849,6 +1003,8 @@ test('autonomous review and every judge failure path use the classified safe fee
     ['client throw', { review() { throw new Error(PROMPT_SECRET); } }, 'judge_unavailable'],
     ['client rejection', { async review() { throw new Error(PROMPT_SECRET); } }, 'judge_unavailable'],
     ['client undefined', { async review() { return undefined; } }, 'judge_unavailable'],
+    ['client invalid response', { async review() { return { ok: false, reason: 'invalid judge response', latencyMs: 1 }; } }, 'invalid_judge_response'],
+    ['client invalid request', { async review() { return { ok: false, reason: 'invalid judge request', latencyMs: 1 }; } }, 'invalid_judge_response'],
     ['parser error', { async review() { return { ok: true, text: '{invalid', latencyMs: 1 }; } }, 'invalid_judge_response'],
     ['wrong policy', {
       async review(input) {
@@ -1089,6 +1245,8 @@ test('supervised review, client failures, and missing provider return classified
     ['client error', { async review() { return { ok: false, reason: 'request failed', latencyMs: 4 }; } }, {}, 1, 'judge_unavailable'],
     ['client throw', { review() { throw new Error(PROMPT_SECRET); } }, {}, 1, 'judge_unavailable'],
     ['client undefined', { async review() { return undefined; } }, {}, 1, 'judge_unavailable'],
+    ['client invalid response', { async review() { return { ok: false, reason: 'invalid judge response', latencyMs: 4 }; } }, {}, 1, 'invalid_judge_response'],
+    ['client invalid request', { async review() { return { ok: false, reason: 'invalid judge request', latencyMs: 4 }; } }, {}, 1, 'invalid_judge_response'],
     ['parser error', { async review() { return { ok: true, text: 'not json', latencyMs: 4 }; } }, {}, 1, 'invalid_judge_response'],
     ['missing provider', NO_INJECTION, { providerConfig: NO_PROVIDER }, 0, 'judge_unavailable'],
   ];
@@ -1437,14 +1595,20 @@ test('params, IDs, or tool name mutated during async review can never allow', as
         client,
       });
       capturePrompt(harness);
-      const call = callData('run-1', { nested: { value: 'original' } });
+      const call = callData('run-1', {
+        path: '/tmp/status',
+        nested: { value: 'original' },
+      });
       const pending = harness.beforeTool(call.event, call.ctx);
       await started;
       mutate(call);
       release();
       const result = await pending;
-      assertBlocked(result);
+      assertBlocked(result, 'invalid_judge_response');
       assert.equal(harness.auditEvents.length, 1);
+      assert.equal(harness.auditEvents[0].outcome, 'failure');
+      assert.equal(harness.auditEvents[0].feedback_code, 'invalid_judge_response');
+      assert.equal(harness.auditEvents[0].feedback_status, 'blocked');
     });
   }
 });
@@ -1480,19 +1644,19 @@ test('store, client, parser, audit, and logger hostile getter/throw paths never 
       },
     };
     const clients = [
-      getterClient,
-      { review() { throw new Error(PROMPT_SECRET); } },
-      { review() { return Promise.reject(new Error(PROMPT_SECRET)); } },
-      hostileResultClient,
+      [getterClient, 'judge_unavailable'],
+      [{ review() { throw new Error(PROMPT_SECRET); } }, 'judge_unavailable'],
+      [{ review() { return Promise.reject(new Error(PROMPT_SECRET)); } }, 'judge_unavailable'],
+      [hostileResultClient, 'invalid_judge_response'],
     ];
-    for (const client of clients) {
+    for (const [client, expectedCode] of clients) {
       const harness = setup({ client });
       capturePrompt(harness);
       const call = callData();
       assertApproval(
         await harness.beforeTool(call.event, call.ctx),
         call.event.params,
-        'judge_unavailable',
+        expectedCode,
       );
     }
   });

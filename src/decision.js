@@ -14,6 +14,7 @@ import {
 import {
   createApprovalDescription,
   createBlockFeedback,
+  feedbackRequiresBlock,
   selectFeedbackCode,
 } from './feedback.js';
 import { containsOpaqueData, isSecretBearingKey } from './redact.js';
@@ -3656,13 +3657,16 @@ function approvalSeverity(result) {
 export function mapVerdict({ mode, enforcement, result, params } = {}) {
   if (enforcement === 'shadow') return undefined;
 
-  if (enforcement === 'enforce'
-    && (mode === 'autonomous' || mode === 'supervised')
-    && result?.kind === 'allow') return { params };
-
   const feedbackCode = selectFeedbackCode(result);
 
-  if (result?.kind === 'deny') {
+  if (enforcement === 'enforce'
+    && (mode === 'autonomous' || mode === 'supervised')
+    && result?.kind === 'allow'
+    && feedbackCode === null) return { params };
+
+  if (result?.kind === 'allow'
+    || result?.kind === 'deny'
+    || feedbackRequiresBlock(feedbackCode)) {
     return {
       block: true,
       blockReason: createBlockFeedback(feedbackCode),

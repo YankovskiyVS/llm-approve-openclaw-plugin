@@ -1,5 +1,11 @@
 import { types as utilTypes } from 'node:util';
 
+const GET_OWN_PROPERTY_DESCRIPTOR = Object.getOwnPropertyDescriptor;
+const GET_PROTOTYPE_OF = Object.getPrototypeOf;
+const HAS_OWN = Object.hasOwn;
+const REFLECT_APPLY = Reflect.apply;
+const SET_HAS = Set.prototype.has;
+
 const FEEDBACK_SCHEMA = 'openclaw.action-gate.feedback.v1';
 const INVALID_CODE = 'invalid_judge_response';
 const SAFE_CODE = 'safe_and_authorized';
@@ -103,6 +109,7 @@ export const FEEDBACK_CODES = Object.freeze(
 export const FEEDBACK_STATUSES = Object.freeze(['blocked', 'approval_required']);
 const MODEL_CODES = new Set(TEMPLATE_DEFINITIONS.slice(0, 10).map(([code]) => code));
 const HOST_CODES = new Set(TEMPLATE_DEFINITIONS.slice(10).map(([code]) => code));
+const NON_OVERRIDABLE_CODES = new Set(['hard_policy_block', 'repeated_denials']);
 const TEMPLATES = Object.create(null);
 
 for (const [code, message, retry, nextStep] of TEMPLATE_DEFINITIONS) {
@@ -130,8 +137,8 @@ Object.freeze(TEMPLATES);
 
 function templateFor(code) {
   if (typeof code !== 'string') return TEMPLATES[INVALID_CODE];
-  const descriptor = Object.getOwnPropertyDescriptor(TEMPLATES, code);
-  return descriptor && Object.hasOwn(descriptor, 'value')
+  const descriptor = GET_OWN_PROPERTY_DESCRIPTOR(TEMPLATES, code);
+  return descriptor && HAS_OWN(descriptor, 'value')
     ? descriptor.value
     : TEMPLATES[INVALID_CODE];
 }
@@ -141,13 +148,13 @@ function ownData(source, key) {
     if (source === null || typeof source !== 'object' || utilTypes.isProxy(source)) {
       return { ok: false, present: false, value: undefined };
     }
-    const prototype = Object.getPrototypeOf(source);
+    const prototype = GET_PROTOTYPE_OF(source);
     if (prototype !== Object.prototype && prototype !== null) {
       return { ok: false, present: false, value: undefined };
     }
-    const descriptor = Object.getOwnPropertyDescriptor(source, key);
+    const descriptor = GET_OWN_PROPERTY_DESCRIPTOR(source, key);
     if (!descriptor) return { ok: true, present: false, value: undefined };
-    if (!Object.hasOwn(descriptor, 'value')) {
+    if (!HAS_OWN(descriptor, 'value')) {
       return { ok: false, present: true, value: undefined };
     }
     return { ok: true, present: true, value: descriptor.value };
@@ -161,8 +168,8 @@ function hostCode(result) {
   if (!field.ok) return { ok: false, value: INVALID_CODE };
   if (!field.present) return { ok: true, value: null };
   return {
-    ok: typeof field.value === 'string' && HOST_CODES.has(field.value),
-    value: typeof field.value === 'string' && HOST_CODES.has(field.value)
+    ok: typeof field.value === 'string' && REFLECT_APPLY(SET_HAS, HOST_CODES, [field.value]),
+    value: typeof field.value === 'string' && REFLECT_APPLY(SET_HAS, HOST_CODES, [field.value])
       ? field.value
       : INVALID_CODE,
   };
@@ -176,13 +183,20 @@ export function createApprovalDescription(code) {
   return templateFor(code).approval;
 }
 
+export function feedbackRequiresBlock(code) {
+  return typeof code === 'string'
+    && REFLECT_APPLY(SET_HAS, NON_OVERRIDABLE_CODES, [code]);
+}
+
 export function selectFeedbackCode(result) {
   const kind = ownData(result, 'kind');
-  if (!kind.ok || !kind.present || !['allow', 'deny', 'review', 'failure'].includes(kind.value)) {
+  if (!kind.ok || !kind.present
+    || (kind.value !== 'allow'
+      && kind.value !== 'deny'
+      && kind.value !== 'review'
+      && kind.value !== 'failure')) {
     return INVALID_CODE;
   }
-  if (kind.value === 'allow') return null;
-
   const opaque = ownData(result, 'opaque');
   const localGuard = ownData(result, 'local_guard');
   if (!opaque.ok || !localGuard.ok) return INVALID_CODE;
@@ -192,6 +206,7 @@ export function selectFeedbackCode(result) {
   const explicitHostCode = hostCode(result);
   if (!explicitHostCode.ok) return INVALID_CODE;
   if (explicitHostCode.value !== null) return explicitHostCode.value;
+  if (kind.value === 'allow') return null;
   if (kind.value === 'failure') return INVALID_CODE;
 
   const verdictField = ownData(result, 'verdict');
@@ -206,6 +221,17 @@ export function selectFeedbackCode(result) {
   if (!reasonCode.ok || !reasonCode.present
     || typeof reasonCode.value !== 'string'
     || reasonCode.value === SAFE_CODE
-    || !MODEL_CODES.has(reasonCode.value)) return INVALID_CODE;
+    || !REFLECT_APPLY(SET_HAS, MODEL_CODES, [reasonCode.value])) return INVALID_CODE;
   return reasonCode.value;
+}
+
+export function selectFeedbackOutcome(result) {
+  const kind = ownData(result, 'kind');
+  if (!kind.ok || !kind.present
+    || (kind.value !== 'allow'
+      && kind.value !== 'deny'
+      && kind.value !== 'review'
+      && kind.value !== 'failure')) return 'failure';
+  if (kind.value === 'allow' && selectFeedbackCode(result) !== null) return 'deny';
+  return kind.value;
 }
