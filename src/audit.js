@@ -200,7 +200,9 @@ export function buildAuditEvent(input = {}) {
     const event = emptyAuditEvent();
 
     event.tool_name = validToolName(ownDataValue(action, 'tool_name'));
-    event.action_hash = computeActionHash(action);
+    event.action_hash = action === null || typeof action !== 'object'
+      ? null
+      : computeActionHash(action);
     event.agent_id_hash = hashCorrelationId('agent_id', ownDataValue(action, 'agent_id'));
     event.session_key_hash = hashCorrelationId('session_key', ownDataValue(action, 'session_key'));
     event.run_id_hash = hashCorrelationId('run_id', ownDataValue(action, 'run_id'));

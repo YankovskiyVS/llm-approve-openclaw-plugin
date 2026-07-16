@@ -218,6 +218,12 @@ function tripDecisionStore(store, runId) {
   store.record(runId, recordedDecision());
 }
 
+function cyclicCallData(runId) {
+  const params = { path: '/tmp/status' };
+  params.self = params;
+  return callData(runId, params);
+}
+
 test('exports the factory and default plugin, and registers exactly two priority hooks', () => {
   assert.strictEqual(createActionJudgePluginFromIndex, createActionJudgePlugin);
   assert.equal(defaultPlugin.id, PLUGIN_ID);
@@ -364,6 +370,60 @@ test('a pre-tripped run skips Qwen and blocks in both enforcing modes', async (t
   }
 });
 
+test('a pre-tripped trusted run blocks before malformed params are serialized', async (t) => {
+  for (const mode of ['autonomous', 'supervised']) {
+    await t.test(mode, async () => {
+      const decisionStore = runDecisionStore();
+      tripDecisionStore(decisionStore, 'run-tripped-malformed');
+      const client = verdictClient();
+      const harness = setup({
+        pluginConfig: { mode, enforcement: 'enforce' },
+        client,
+        deps: { decisionStore },
+      });
+      capturePrompt(harness, 'Read status.', 'run-tripped-malformed');
+      const call = cyclicCallData('run-tripped-malformed');
+
+      const result = await harness.beforeTool(call.event, call.ctx);
+
+      assert.equal(client.calls.length, 0);
+      assertBlocked(result, 'repeated_denials');
+      assert.equal(harness.auditEvents.length, 1);
+      assert.equal(harness.auditEvents[0].outcome, 'deny');
+      assert.equal(harness.auditEvents[0].feedback_code, 'repeated_denials');
+      assert.equal(harness.auditEvents[0].feedback_status, 'blocked');
+      const snapshot = decisionStore.snapshot('run-tripped-malformed');
+      assert.equal(snapshot.length, 4);
+      assert.equal(snapshot[3].reason_code, 'repeated_denials');
+    });
+  }
+});
+
+test('a fresh trusted run records malformed params exactly once as failure', async () => {
+  const decisionStore = runDecisionStore();
+  const client = verdictClient();
+  const harness = setup({ client, deps: { decisionStore } });
+  capturePrompt(harness, 'Read status.', 'run-fresh-malformed');
+  const call = cyclicCallData('run-fresh-malformed');
+
+  const result = await harness.beforeTool(call.event, call.ctx);
+
+  assert.equal(client.calls.length, 0);
+  assertApproval(result, {}, 'invalid_judge_response');
+  assert.equal(harness.auditEvents.length, 1);
+  assert.equal(harness.auditEvents[0].outcome, 'failure');
+  const snapshot = decisionStore.snapshot('run-fresh-malformed');
+  assert.equal(snapshot.length, 1);
+  assert.deepEqual({ ...snapshot[0] }, {
+    tool_name: 'read',
+    tool_family: 'filesystem',
+    outcome: 'failure',
+    risk: null,
+    authorization: null,
+    reason_code: 'invalid_judge_response',
+  });
+});
+
 test('shadow observes a pre-tripped run through Qwen but audits the breaker candidate', async () => {
   const decisionStore = runDecisionStore();
   tripDecisionStore(decisionStore, 'run-shadow-tripped');
@@ -385,6 +445,31 @@ test('shadow observes a pre-tripped run through Qwen but audits the breaker cand
   assert.equal(harness.auditEvents[0].feedback_code, null);
   assert.equal(harness.auditEvents[0].feedback_status, null);
   const snapshot = decisionStore.snapshot('run-shadow-tripped');
+  assert.equal(snapshot[3].reason_code, 'repeated_denials');
+});
+
+test('shadow keeps malformed pre-tripped calls non-enforcing but records the candidate', async () => {
+  const decisionStore = runDecisionStore();
+  tripDecisionStore(decisionStore, 'run-shadow-malformed');
+  const client = verdictClient();
+  const harness = setup({
+    pluginConfig: { mode: 'autonomous', enforcement: 'shadow' },
+    client,
+    deps: { decisionStore },
+  });
+  capturePrompt(harness, 'Read status.', 'run-shadow-malformed');
+  const call = cyclicCallData('run-shadow-malformed');
+
+  const result = await harness.beforeTool(call.event, call.ctx);
+
+  assert.equal(result, undefined);
+  assert.equal(client.calls.length, 0);
+  assert.equal(harness.auditEvents.length, 1);
+  assert.equal(harness.auditEvents[0].outcome, 'deny');
+  assert.equal(harness.auditEvents[0].feedback_code, null);
+  assert.equal(harness.auditEvents[0].feedback_status, null);
+  const snapshot = decisionStore.snapshot('run-shadow-malformed');
+  assert.equal(snapshot.length, 4);
   assert.equal(snapshot[3].reason_code, 'repeated_denials');
 });
 
@@ -420,7 +505,7 @@ test('third denial keeps its reason and the fourth call is stopped before Qwen',
   );
   const snapshot = decisionStore.snapshot('run-1');
   assert.deepEqual(
-    snapshot.map((entry) => entry.reason_code),
+    Array.from({ length: snapshot.length }, (_, index) => snapshot[index].reason_code),
     ['out_of_scope', 'out_of_scope', 'out_of_scope', 'repeated_denials'],
   );
 });
@@ -497,6 +582,87 @@ test('trusted calls record exactly once before audit and a new run stays indepen
     authorization: 'high',
     reason_code: 'safe_and_authorized',
   });
+});
+
+test('an impossible newly-tripped status fails closed for non-denial records', async (t) => {
+  const cases = [
+    {
+      name: 'allow in autonomous mode blocks',
+      client: verdictClient(),
+      config: { mode: 'autonomous', enforcement: 'enforce' },
+      expectedOutcome: 'allow',
+      assertResult(result) {
+        assertBlocked(result, 'invalid_judge_response');
+      },
+      expectedFeedbackStatus: 'blocked',
+    },
+    {
+      name: 'allow in shadow mode becomes an audit failure',
+      client: verdictClient(),
+      config: { mode: 'autonomous', enforcement: 'shadow' },
+      expectedOutcome: 'allow',
+      assertResult(result) {
+        assert.equal(result, undefined);
+      },
+      expectedFeedbackStatus: null,
+    },
+    {
+      name: 'review in supervised mode requires approval',
+      client: verdictClient({ decision: 'review', risk: 'medium', authorization: 'medium' }),
+      config: { mode: 'supervised', enforcement: 'enforce' },
+      expectedOutcome: 'review',
+      assertResult(result, params) {
+        assertApproval(result, params, 'invalid_judge_response');
+      },
+      expectedFeedbackStatus: 'approval_required',
+    },
+    {
+      name: 'failure in autonomous mode uses invalid-status feedback',
+      client: {
+        async review() {
+          return { ok: false, reason: 'request failed', latencyMs: 1 };
+        },
+      },
+      config: { mode: 'autonomous', enforcement: 'enforce' },
+      expectedOutcome: 'failure',
+      assertResult(result) {
+        assertBlocked(result, 'invalid_judge_response');
+      },
+      expectedFeedbackStatus: 'blocked',
+    },
+  ];
+
+  for (const candidate of cases) {
+    await t.test(candidate.name, async () => {
+      let recorded;
+      const decisionStore = {
+        isTripped() { return false; },
+        record(_runId, metadata) {
+          recorded = metadata;
+          return { already_tripped: false, newly_tripped: true, tripped: true };
+        },
+      };
+      const harness = setup({
+        pluginConfig: candidate.config,
+        client: candidate.client,
+        deps: { decisionStore },
+      });
+      capturePrompt(harness);
+      const call = callData();
+
+      const result = await harness.beforeTool(call.event, call.ctx);
+
+      candidate.assertResult(result, call.event.params);
+      assert.equal(recorded.outcome, candidate.expectedOutcome);
+      assert.equal(harness.auditEvents.length, 1);
+      assert.equal(harness.auditEvents[0].outcome, 'failure');
+      assert.equal(
+        harness.auditEvents[0].feedback_code,
+        candidate.expectedFeedbackStatus === null ? null : 'invalid_judge_response',
+      );
+      assert.equal(harness.auditEvents[0].feedback_status, candidate.expectedFeedbackStatus);
+    });
+  }
 });
 
 test('missing, throwing, async, and hostile decision-store methods fail closed', async (t) => {

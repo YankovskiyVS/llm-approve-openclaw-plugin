@@ -93,9 +93,9 @@ function assertStoreError(fn) {
 }
 
 function assertScalarRecord(actual, expected) {
-  assert.equal(Object.getPrototypeOf(actual), Object.prototype);
+  assert.equal(Object.getPrototypeOf(actual), null);
   assert.equal(Object.isFrozen(actual), true);
-  assert.deepEqual(actual, expected);
+  assert.deepEqual({ ...actual }, expected);
 }
 
 function lastSnapshotEntry(snapshot) {
@@ -104,7 +104,7 @@ function lastSnapshotEntry(snapshot) {
 
 function assertEmptySnapshot(snapshot) {
   assert.equal(Array.isArray(snapshot), true);
-  assert.equal(Object.getPrototypeOf(snapshot), Array.prototype);
+  assert.equal(Object.getPrototypeOf(snapshot), null);
   assert.equal(Object.isFrozen(snapshot), true);
   assert.equal(snapshot.length, 0);
 }
@@ -178,11 +178,12 @@ test('record stores only exact frozen scalar metadata and returns detached bound
     Array.from({ length: 50 }, (_, index) => `custom_tool_${index + 5}`),
   );
   assert.equal(Object.isFrozen(first), true);
-  assert.equal(Object.getPrototypeOf(first), Array.prototype);
+  assert.equal(Object.getPrototypeOf(first), null);
   assert.equal(Object.isFrozen(first[0]), true);
   assert.notStrictEqual(first, second);
   assert.notStrictEqual(first[0], second[0]);
-  for (const entry of first) {
+  for (let index = 0; index < first.length; index += 1) {
+    const entry = first[index];
     assert.deepEqual(Object.keys(entry), METADATA_KEYS);
     assert.equal(Object.values(entry).every((value) => value === null
       || ['string', 'number', 'boolean'].includes(typeof value)), true);
@@ -295,6 +296,123 @@ test('array iterator and prototype-chain replacement cannot suppress the latch',
   assert.equal(third.tripped, true);
   assert.equal(snapshot.length, 3);
   assert.equal(JSON.stringify(snapshot).includes(SENTINEL), false);
+});
+
+test('Object.prototype getters, setters, and toJSON cannot suppress or rewrite the latch', () => {
+  const fakeClock = clock();
+  const store = createRunDecisionStore(storeOptions(fakeClock));
+  const denials = [deny(), deny(), deny()];
+  const outcomeDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'outcome');
+  const toJsonDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON');
+  let inheritedReads = 0;
+  let third;
+  let snapshot;
+  let serializedStatus;
+  let serializedSnapshot;
+
+  Object.defineProperty(Object.prototype, 'outcome', {
+    configurable: true,
+    get() {
+      inheritedReads += 1;
+      return 'allow';
+    },
+    set() {},
+  });
+  Object.defineProperty(Object.prototype, 'toJSON', {
+    configurable: true,
+    get() {
+      inheritedReads += 1;
+      return () => ({ leaked: SENTINEL });
+    },
+  });
+  try {
+    store.record('run-object-prototype', denials[0]);
+    store.record('run-object-prototype', denials[1]);
+    third = store.record('run-object-prototype', denials[2]);
+    snapshot = store.snapshot('run-object-prototype');
+    serializedStatus = JSON.stringify(third);
+    serializedSnapshot = JSON.stringify(snapshot);
+  } finally {
+    if (outcomeDescriptor) {
+      Object.defineProperty(Object.prototype, 'outcome', outcomeDescriptor);
+    } else {
+      delete Object.prototype.outcome;
+    }
+    if (toJsonDescriptor) {
+      Object.defineProperty(Object.prototype, 'toJSON', toJsonDescriptor);
+    } else {
+      delete Object.prototype.toJSON;
+    }
+  }
+
+  assert.equal(inheritedReads, 0);
+  assert.equal(third.newly_tripped, true);
+  assert.equal(third.tripped, true);
+  assert.equal(Object.getPrototypeOf(third), null);
+  assert.equal(Object.getPrototypeOf(snapshot), null);
+  assert.equal(Object.getPrototypeOf(snapshot[0]), null);
+  assert.equal(Object.hasOwn(snapshot[0], 'outcome'), true);
+  assert.equal(snapshot[0].outcome, 'deny');
+  assert.equal(serializedStatus.includes(SENTINEL), false);
+  assert.equal(serializedSnapshot.includes(SENTINEL), false);
+  assert.equal(serializedSnapshot.includes('"outcome":"deny"'), true);
+});
+
+test('Object.prototype setters cannot remove methods while the store API is constructed', () => {
+  const methodNames = ['isTripped', 'record', 'snapshot', 'size'];
+  const descriptors = methodNames.map(
+    (name) => Object.getOwnPropertyDescriptor(Object.prototype, name),
+  );
+  let inheritedWrites = 0;
+  let store;
+
+  for (const name of methodNames) {
+    Object.defineProperty(Object.prototype, name, {
+      configurable: true,
+      get() { return undefined; },
+      set() { inheritedWrites += 1; },
+    });
+  }
+  try {
+    const fakeClock = clock();
+    store = createRunDecisionStore(storeOptions(fakeClock));
+  } finally {
+    for (let index = 0; index < methodNames.length; index += 1) {
+      if (descriptors[index]) {
+        Object.defineProperty(Object.prototype, methodNames[index], descriptors[index]);
+      } else {
+        delete Object.prototype[methodNames[index]];
+      }
+    }
+  }
+
+  assert.equal(inheritedWrites, 0);
+  assert.equal(Object.getPrototypeOf(store), null);
+  for (const name of methodNames) {
+    assert.equal(Object.hasOwn(store, name), true);
+    assert.equal(typeof store[name], 'function');
+  }
+  assert.equal(store.record('run-api-prototype', deny()).tripped, false);
+});
+
+test('a rejecting async clock fails closed without an unhandled rejection', async () => {
+  const unhandled = [];
+  function observe(reason) {
+    unhandled.push(reason);
+  }
+  process.on('unhandledRejection', observe);
+  try {
+    assertStoreError(() => createRunDecisionStore(storeOptions({
+      now() {
+        return Promise.reject(new Error(SENTINEL));
+      },
+    })));
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    process.removeListener('unhandledRejection', observe);
+  }
+
+  assert.deepEqual(unhandled, []);
 });
 
 test('a tripped run is irreversible and later records become safe repeated-denial metadata', () => {

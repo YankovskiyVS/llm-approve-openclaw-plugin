@@ -46,6 +46,8 @@ const STORE_MAX_ENTRIES = 1000;
 const DECISION_STORE_HISTORY_LIMIT = 50;
 const DECISION_STORE_CONSECUTIVE_DENY_LIMIT = 3;
 const DECISION_STORE_ROLLING_DENY_LIMIT = 10;
+const MAX_DECISION_ID_LENGTH = 256;
+const MAX_DECISION_ID_BYTES = 512;
 const SETUP_FAILED_MESSAGE = 'LLM action judge setup failed';
 const REGISTERED_MESSAGE = 'LLM action judge registered';
 const FAILURE_REASON = 'judge evaluation failed';
@@ -56,6 +58,8 @@ const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 const VERDICT_KEY_SET = new Set(JUDGE_VERDICT_KEYS);
 const ARRAY_IS_ARRAY = Array.isArray;
 const ARRAY_PROTOTYPE = Array.prototype;
+const BUFFER_OBJECT = Buffer;
+const BUFFER_BYTE_LENGTH = Buffer.byteLength;
 const OBJECT_PROTOTYPE = Object.prototype;
 const GET_PROTOTYPE_OF = Object.getPrototypeOf;
 const SET_PROTOTYPE_OF = Object.setPrototypeOf;
@@ -65,6 +69,8 @@ const REFLECT_OWN_KEYS = Reflect.ownKeys;
 const CREATE_OBJECT = Object.create;
 const IS_PROXY = utilTypes.isProxy;
 const REFLECT_APPLY = Reflect.apply;
+const REGEXP_TEST = RegExp.prototype.test;
+const STRING_TRIM = String.prototype.trim;
 const DECISION_STATUS_KEYS = Object.freeze([
   'already_tripped',
   'newly_tripped',
@@ -134,7 +140,29 @@ function dependencyValue(deps, key, fallback) {
 }
 
 function isNonBlankString(value) {
-  return typeof value === 'string' && value.trim() !== '';
+  return typeof value === 'string' && REFLECT_APPLY(STRING_TRIM, value, []) !== '';
+}
+
+function validDecisionIdentityValue(value) {
+  return typeof value === 'string'
+    && value.length > 0
+    && REFLECT_APPLY(STRING_TRIM, value, []) !== ''
+    && value.length <= MAX_DECISION_ID_LENGTH
+    && REFLECT_APPLY(BUFFER_BYTE_LENGTH, BUFFER_OBJECT, [value, 'utf8'])
+      <= MAX_DECISION_ID_BYTES
+    && !REFLECT_APPLY(REGEXP_TEST, CONTROL_PATTERN, [value]);
+}
+
+function boundedDecisionIdentity(identity) {
+  if (!identity.ok
+    || !validDecisionIdentityValue(identity.runId)
+    || !validDecisionIdentityValue(identity.toolName)) return false;
+  try {
+    classifyToolFamily(identity.toolName);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function consistentValue(event, ctx, key, required) {
@@ -308,12 +336,26 @@ function decisionStatusSnapshot(value) {
   }
 }
 
+function metadataAllowsNewTrip(metadata) {
+  try {
+    const outcome = GET_OWN_PROPERTY_DESCRIPTOR(metadata, 'outcome');
+    const reasonCode = GET_OWN_PROPERTY_DESCRIPTOR(metadata, 'reason_code');
+    return outcome && HAS_OWN(outcome, 'value') && outcome.value === 'deny'
+      && reasonCode && HAS_OWN(reasonCode, 'value')
+      && typeof reasonCode.value === 'string'
+      && reasonCode.value !== 'repeated_denials';
+  } catch {
+    return false;
+  }
+}
+
 function recordRunDecision(store, runId, metadata) {
   const record = decisionStoreMethod(store, 'record');
   if (!record) return invalidDecisionStore();
+  const allowsNewTrip = metadataAllowsNewTrip(metadata);
   const value = REFLECT_APPLY(record, store, [runId, metadata]);
   const snapshot = decisionStatusSnapshot(value);
-  if (snapshot) return snapshot;
+  if (snapshot && (!snapshot.newly_tripped || allowsNewTrip)) return snapshot;
   suppressRejection(value);
   return invalidDecisionStore();
 }
@@ -649,19 +691,7 @@ export function createActionJudgePlugin(deps = {}) {
 
       try {
         const identity = identitySnapshot(event, ctx);
-        let envelope;
-        try {
-          action = createAction({ event, ctx });
-          const copiedParams = plainParams(action);
-          if (copiedParams !== null) params = copiedParams;
-          envelope = createJudgeEnvelope(action);
-          const hash = readData(envelope, 'action_hash');
-          expectedHash = hash.ok ? hash.value : undefined;
-        } catch {
-          envelope = undefined;
-        }
-
-        if (identity.ok && actionMatchesIdentity(action, identity)) {
+        if (boundedDecisionIdentity(identity)) {
           trackedIdentity = identity;
           try {
             const alreadyTripped = readDecisionStoreTrip(decisionStore, identity.runId);
@@ -676,7 +706,20 @@ export function createActionJudgePlugin(deps = {}) {
           }
         }
 
+        let envelope;
+        try {
+          action = createAction({ event, ctx });
+          const copiedParams = plainParams(action);
+          if (copiedParams !== null) params = copiedParams;
+          envelope = createJudgeEnvelope(action);
+          const hash = readData(envelope, 'action_hash');
+          expectedHash = hash.ok ? hash.value : undefined;
+        } catch {
+          envelope = undefined;
+        }
+
         if (trackedIdentity !== undefined && !skipJudge
+          && actionMatchesIdentity(action, identity)
           && envelope !== undefined && typeof expectedHash === 'string') {
           const userPrompt = getStoredPrompt(store, identity.runId);
           if (isTrustedUserRequest(userPrompt)) {

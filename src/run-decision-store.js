@@ -21,6 +21,8 @@ const MAP_SET = Map.prototype.set;
 const MAP_SIZE_GETTER = GET_OWN_PROPERTY_DESCRIPTOR(Map.prototype, 'size').get;
 const NUMBER_IS_SAFE_INTEGER = Number.isSafeInteger;
 const OBJECT_PROTOTYPE = Object.prototype;
+const IS_PROMISE = utilTypes.isPromise;
+const PROMISE_THEN = Promise.prototype.then;
 const REFLECT_APPLY = Reflect.apply;
 const REFLECT_OWN_KEYS = Reflect.ownKeys;
 const REGEXP_TEST = RegExp.prototype.test;
@@ -104,7 +106,7 @@ function exactKey(keys, key) {
 }
 
 function frozenScalarRecord(values) {
-  const result = {};
+  const result = CREATE_OBJECT(null);
   for (let index = 0; index < METADATA_KEYS.length; index += 1) {
     const key = METADATA_KEYS[index];
     result[key] = values[key];
@@ -232,7 +234,7 @@ function snapshotOptions(options) {
 }
 
 function status(alreadyTripped, newlyTripped, tripped) {
-  const result = {};
+  const result = CREATE_OBJECT(null);
   result.already_tripped = alreadyTripped;
   result.newly_tripped = newlyTripped;
   result.tripped = tripped;
@@ -248,7 +250,16 @@ export function createRunDecisionStore(options) {
     try {
       const value = settings.now();
       if (!NUMBER_IS_SAFE_INTEGER(value) || value < 0
-        || (lastClock !== undefined && value < lastClock)) return invalidStore();
+        || (lastClock !== undefined && value < lastClock)) {
+        try {
+          if (IS_PROMISE(value)) {
+            REFLECT_APPLY(PROMISE_THEN, value, [undefined, function ignoreClockRejection() {}]);
+          }
+        } catch {
+          // Invalid clocks still fail closed even if rejection suppression is unavailable.
+        }
+        return invalidStore();
+      }
       lastClock = value;
       return value;
     } catch {
@@ -351,6 +362,7 @@ export function createRunDecisionStore(options) {
   function snapshot(runId) {
     const entry = find(runId).entry;
     const result = [];
+    SET_PROTOTYPE_OF(result, null);
     if (entry) {
       for (let index = 0; index < entry.history.length; index += 1) {
         result[index] = cloneMetadata(entry.history[index]);
@@ -365,7 +377,7 @@ export function createRunDecisionStore(options) {
     return REFLECT_APPLY(MAP_SIZE_GETTER, runs, []);
   }
 
-  const api = {};
+  const api = CREATE_OBJECT(null);
   api.isTripped = isTripped;
   api.record = record;
   api.snapshot = snapshot;
