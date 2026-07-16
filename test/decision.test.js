@@ -15,6 +15,10 @@ import {
 } from '../src/judge-schema.js';
 import { buildJudgeMessages } from '../src/prompt.js';
 import {
+  createApprovalDescription,
+  createBlockFeedback,
+} from '../src/feedback.js';
+import {
   applyLocalSafetyDowngrade,
   applyOpaqueDowngrade,
   mapVerdict,
@@ -3076,33 +3080,56 @@ test('mapVerdict enforced allow returns the exact original params in both modes'
   }
 });
 
-test('mapVerdict enforced deny blocks in both modes with a stable reason', () => {
+test('mapVerdict sends explicit deny feedback to blockReason in both modes', () => {
+  const result = {
+    kind: 'deny',
+    verdict: verdict({
+      decision: 'deny',
+      risk: 'high',
+      authorization: 'low',
+      reason_code: 'out_of_scope',
+    }),
+  };
   for (const mode of ['autonomous', 'supervised']) {
     assert.deepEqual(mapVerdict({
       mode,
       enforcement: 'enforce',
-      result: { kind: 'deny', reason: 'out of scope' },
+      result,
       params: {},
     }), {
       block: true,
-      blockReason: 'LLM action judge denied the tool call',
+      blockReason: createBlockFeedback('out_of_scope'),
     });
   }
 });
 
-test('mapVerdict enforced review and failure block in autonomous mode', () => {
-  for (const [kind, reason] of [
-    ['review', 'uncertain'],
-    ['failure', 'judge unavailable'],
+test('mapVerdict maps every autonomous non-allow outcome to safe block feedback', () => {
+  for (const [result, code] of [
+    [{
+      kind: 'review',
+      verdict: verdict({ decision: 'review', reason_code: 'authorization_missing' }),
+    }, 'authorization_missing'],
+    [{
+      kind: 'review',
+      opaque: true,
+      verdict: verdict({ decision: 'review', reason_code: 'other_policy_risk' }),
+    }, 'opaque_or_unverifiable'],
+    [{
+      kind: 'review',
+      local_guard: true,
+      verdict: verdict({ decision: 'allow', reason_code: 'safe_and_authorized' }),
+    }, 'local_policy_review'],
+    [{ kind: 'failure', feedback_code: 'judge_unavailable' }, 'judge_unavailable'],
+    [{ kind: 'failure', feedback_code: 'invalid_judge_response' }, 'invalid_judge_response'],
   ]) {
     assert.deepEqual(mapVerdict({
       mode: 'autonomous',
       enforcement: 'enforce',
-      result: { kind, reason },
+      result,
       params: {},
     }), {
       block: true,
-      blockReason: 'LLM action judge review required',
+      blockReason: createBlockFeedback(code),
     });
   }
 });
@@ -3126,7 +3153,7 @@ test('mapVerdict binds exact params to complete one-call supervised approval', (
     params,
     requireApproval: {
       title: 'LLM action judge review required',
-      description: 'LLM action judge could not safely allow this tool call. Approve this call once to continue.',
+      description: createApprovalDescription('other_policy_risk'),
       severity: 'critical',
       timeoutMs: APPROVAL_TIMEOUT_MS,
       timeoutBehavior: 'deny',
@@ -3137,24 +3164,26 @@ test('mapVerdict binds exact params to complete one-call supervised approval', (
   assert.equal(Object.hasOwn(mapped.requireApproval, 'params'), false);
 });
 
-test('mapVerdict maps supervised failures to fail-closed one-call approval', () => {
+test('mapVerdict maps classified supervised failures to safe one-call approvals', () => {
   const params = { path: '/tmp/status' };
-  assert.deepEqual(mapVerdict({
-    mode: 'supervised',
-    enforcement: 'enforce',
-    result: { kind: 'failure', reason: 'invalid judge response' },
-    params,
-  }), {
-    params,
-    requireApproval: {
-      title: 'LLM action judge review required',
-      description: 'LLM action judge could not safely allow this tool call. Approve this call once to continue.',
-      severity: 'critical',
-      timeoutMs: APPROVAL_TIMEOUT_MS,
-      timeoutBehavior: 'deny',
-      pluginId: PLUGIN_ID,
-    },
-  });
+  for (const code of ['judge_unavailable', 'invalid_judge_response']) {
+    assert.deepEqual(mapVerdict({
+      mode: 'supervised',
+      enforcement: 'enforce',
+      result: { kind: 'failure', feedback_code: code },
+      params,
+    }), {
+      params,
+      requireApproval: {
+        title: 'LLM action judge review required',
+        description: createApprovalDescription(code),
+        severity: 'critical',
+        timeoutMs: APPROVAL_TIMEOUT_MS,
+        timeoutBehavior: 'deny',
+        pluginId: PLUGIN_ID,
+      },
+    });
+  }
 });
 
 test('mapVerdict never exposes model-controlled rationale in host-visible reasons', () => {

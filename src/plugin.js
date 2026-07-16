@@ -9,6 +9,11 @@ import {
 } from './constants.js';
 import { createContextStore } from './context-store.js';
 import {
+  createApprovalDescription,
+  createBlockFeedback,
+  selectFeedbackCode,
+} from './feedback.js';
+import {
   applyLocalSafetyDowngrade,
   applyOpaqueDowngrade,
   mapVerdict,
@@ -187,8 +192,8 @@ function safeLatency(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
-function failure() {
-  return { kind: 'failure', reason: FAILURE_REASON };
+function failure(feedbackCode = 'invalid_judge_response') {
+  return { kind: 'failure', reason: FAILURE_REASON, feedback_code: feedbackCode };
 }
 
 function getStoredPrompt(store, runId) {
@@ -257,15 +262,16 @@ function normalizedSnapshot(value, verdict) {
 function safeFallbackMapping(config, result, params) {
   if (config.enforcement === 'shadow') return undefined;
   if (result.kind === 'allow') return { params };
+  const feedbackCode = selectFeedbackCode(result);
   if (result.kind === 'deny') {
-    return { block: true, blockReason: 'LLM action judge denied the tool call' };
+    return { block: true, blockReason: createBlockFeedback(feedbackCode) };
   }
   if (config.mode === 'supervised') {
     return {
       params,
       requireApproval: {
         title: 'LLM action judge review required',
-        description: 'LLM action judge could not safely allow this tool call. Approve this call once to continue.',
+        description: createApprovalDescription(feedbackCode),
         severity: 'critical',
         timeoutMs: APPROVAL_TIMEOUT_MS,
         timeoutBehavior: 'deny',
@@ -273,7 +279,7 @@ function safeFallbackMapping(config, result, params) {
       },
     };
   }
-  return { block: true, blockReason: 'LLM action judge review required' };
+  return { block: true, blockReason: createBlockFeedback(feedbackCode) };
 }
 
 function mapSafely(config, result, params) {
@@ -470,39 +476,52 @@ export function createActionJudgePlugin(deps = {}) {
           if (isTrustedUserRequest(userPrompt)) {
             const review = methodValue(client, 'review');
             if (review) {
-              const reviewed = await Promise.resolve().then(() => review.call(client, {
-                userPrompt,
-                envelope,
-              }));
-              const ok = readData(reviewed, 'ok');
-              const latency = readData(reviewed, 'latencyMs');
-              latencyMs = safeLatency(latency.ok ? latency.value : undefined);
-              if (ok.ok && ok.value === true) {
-                const text = readData(reviewed, 'text');
-                if (text.ok && typeof text.value === 'string' && typeof parse === 'function') {
-                  const parsed = parse(text.value, { expectedHash });
-                  const parsedOk = readData(parsed, 'ok');
-                  const parsedVerdict = readData(parsed, 'verdict');
-                  if (parsedOk.ok && parsedOk.value === true && parsedVerdict.ok) {
-                    const verdict = verdictSnapshot(parsedVerdict.value, expectedHash);
-                    if (verdict && typeof normalize === 'function') {
-                      const normalized = normalize(verdict);
-                      const safeNormalized = normalizedSnapshot(normalized, verdict);
-                      if (safeNormalized) {
-                        judgeResult = verdict;
-                        const envelopeParams = readData(createJudgeEnvelope(action), 'params');
-                        const envelopeTool = readData(envelope, 'tool_name');
-                        result = applyLocalSafetyDowngrade(
-                          applyOpaqueDowngrade(safeNormalized, envelopeParams.value),
-                          envelopeTool.ok ? envelopeTool.value : undefined,
-                          envelopeParams.value,
-                          action,
-                        );
+              let reviewed;
+              try {
+                reviewed = await Promise.resolve().then(() => review.call(client, {
+                  userPrompt,
+                  envelope,
+                }));
+              } catch {
+                result = failure('judge_unavailable');
+              }
+              if (reviewed === undefined) {
+                result = failure('judge_unavailable');
+              } else {
+                const ok = readData(reviewed, 'ok');
+                const latency = readData(reviewed, 'latencyMs');
+                latencyMs = safeLatency(latency.ok ? latency.value : undefined);
+                if (!ok.ok || ok.value !== true) {
+                  result = failure('judge_unavailable');
+                } else {
+                  const text = readData(reviewed, 'text');
+                  if (text.ok && typeof text.value === 'string' && typeof parse === 'function') {
+                    const parsed = parse(text.value, { expectedHash });
+                    const parsedOk = readData(parsed, 'ok');
+                    const parsedVerdict = readData(parsed, 'verdict');
+                    if (parsedOk.ok && parsedOk.value === true && parsedVerdict.ok) {
+                      const verdict = verdictSnapshot(parsedVerdict.value, expectedHash);
+                      if (verdict && typeof normalize === 'function') {
+                        const normalized = normalize(verdict);
+                        const safeNormalized = normalizedSnapshot(normalized, verdict);
+                        if (safeNormalized) {
+                          judgeResult = verdict;
+                          const envelopeParams = readData(createJudgeEnvelope(action), 'params');
+                          const envelopeTool = readData(envelope, 'tool_name');
+                          result = applyLocalSafetyDowngrade(
+                            applyOpaqueDowngrade(safeNormalized, envelopeParams.value),
+                            envelopeTool.ok ? envelopeTool.value : undefined,
+                            envelopeParams.value,
+                            action,
+                          );
+                        }
                       }
                     }
                   }
                 }
               }
+            } else {
+              result = failure('judge_unavailable');
             }
           }
         }

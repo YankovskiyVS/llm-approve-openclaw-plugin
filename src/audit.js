@@ -6,6 +6,11 @@ import path from 'node:path';
 import { computeActionHash } from './action.js';
 import { MODEL_ID, PLUGIN_ID, POLICY_VERSION } from './constants.js';
 import { JUDGE_REASON_CODES } from './judge-schema.js';
+import {
+  FEEDBACK_CODES,
+  FEEDBACK_STATUSES,
+  selectFeedbackCode,
+} from './feedback.js';
 
 const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const DECISIONS = new Set(['allow', 'deny', 'review']);
@@ -15,6 +20,8 @@ const REASON_CODES = new Set(JUDGE_REASON_CODES);
 const OUTCOMES = new Set(['allow', 'deny', 'review', 'failure']);
 const MODES = new Set(['autonomous', 'supervised']);
 const ENFORCEMENTS = new Set(['shadow', 'enforce']);
+const CLOSED_FEEDBACK_CODES = new Set(FEEDBACK_CODES);
+const CLOSED_FEEDBACK_STATUSES = new Set(FEEDBACK_STATUSES);
 const OMITTED_RATIONALE = '[model rationale omitted]';
 const WRITE_FAILED_MESSAGE = 'LLM action judge audit write failed';
 const INVALID_WRITER_OPTIONS = 'invalid audit writer options';
@@ -63,6 +70,8 @@ function emptyAuditEvent() {
     latency_ms: null,
     mode: null,
     enforcement: null,
+    feedback_code: null,
+    feedback_status: null,
     rationale: null,
   };
 }
@@ -136,6 +145,19 @@ function judgeVerdict(judgeResult) {
   return nested !== null && typeof nested === 'object' ? nested : judgeResult;
 }
 
+function feedbackMetadata(normalized, mode, enforcement) {
+  if (enforcement !== 'enforce') return { code: null, status: null };
+  const kind = ownDataValue(normalized, 'kind');
+  if (kind === 'allow') return { code: null, status: null };
+  if (!['deny', 'review', 'failure'].includes(kind)) return { code: null, status: null };
+  const code = selectFeedbackCode(normalized);
+  if (!CLOSED_FEEDBACK_CODES.has(code)) return { code: null, status: null };
+  if (kind === 'deny') return { code, status: 'blocked' };
+  if (mode === 'autonomous') return { code, status: 'blocked' };
+  if (mode === 'supervised') return { code, status: 'approval_required' };
+  return { code: null, status: null };
+}
+
 export function buildAuditEvent(input = {}) {
   try {
     if (input === null || typeof input !== 'object') return emptyAuditEvent();
@@ -166,6 +188,9 @@ export function buildAuditEvent(input = {}) {
     event.latency_ms = validLatency(ownDataValue(input, 'latencyMs'));
     event.mode = validEnum(ownDataValue(input, 'mode'), MODES);
     event.enforcement = validEnum(ownDataValue(input, 'enforcement'), ENFORCEMENTS);
+    const feedback = feedbackMetadata(normalized, event.mode, event.enforcement);
+    event.feedback_code = feedback.code;
+    event.feedback_status = feedback.status;
     event.rationale = rationaleIndicator(ownDataValue(judgeResult, 'rationale'));
 
     return event;
@@ -199,6 +224,14 @@ function sanitizeAuditEvent(input) {
   event.latency_ms = validLatency(ownDataValue(input, 'latency_ms'));
   event.mode = validEnum(ownDataValue(input, 'mode'), MODES);
   event.enforcement = validEnum(ownDataValue(input, 'enforcement'), ENFORCEMENTS);
+  event.feedback_code = validEnum(
+    ownDataValue(input, 'feedback_code'),
+    CLOSED_FEEDBACK_CODES,
+  );
+  event.feedback_status = validEnum(
+    ownDataValue(input, 'feedback_status'),
+    CLOSED_FEEDBACK_STATUSES,
+  );
   event.rationale = rationaleIndicator(ownDataValue(input, 'rationale'));
   return event;
 }

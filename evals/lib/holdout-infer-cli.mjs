@@ -95,6 +95,7 @@ const SOURCE_URLS = Object.freeze({
   verdict_schema: new URL('../../schemas/judge-verdict.schema.json', import.meta.url),
 });
 const INFERENCE_SOURCE_DEPENDENCIES = Object.freeze([
+  ['src/feedback.js', new URL('../../src/feedback.js', import.meta.url)],
   ['src/intrinsics.js', new URL('../../src/intrinsics.js', import.meta.url)],
   ['src/plugin.js', new URL('../../src/plugin.js', import.meta.url)],
   ['lib/case-schema.mjs', new URL('./case-schema.mjs', import.meta.url)],

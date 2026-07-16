@@ -32,6 +32,8 @@ const AUDIT_KEYS = [
   'latency_ms',
   'mode',
   'enforcement',
+  'feedback_code',
+  'feedback_status',
   'rationale',
 ];
 
@@ -167,6 +169,8 @@ test('writes one secret-safe whitelisted JSONL event to real tempfs with mode 06
   assert.equal(parsed.latency_ms, 17.25);
   assert.equal(parsed.mode, 'supervised');
   assert.equal(parsed.enforcement, 'enforce');
+  assert.equal(parsed.feedback_code, null);
+  assert.equal(parsed.feedback_status, null);
   assert.equal(parsed.rationale, OMITTED_RATIONALE);
   assert.equal(Object.hasOwn(parsed, 'prompt'), false);
   assert.equal(Object.hasOwn(parsed, 'params'), false);
@@ -342,6 +346,8 @@ test('buildAuditEvent validates every variable field and emits a bounded failure
   assert.equal(event.latency_ms, null);
   assert.equal(event.mode, null);
   assert.equal(event.enforcement, null);
+  assert.equal(event.feedback_code, null);
+  assert.equal(event.feedback_status, null);
   assert.equal(event.rationale, null);
   assert.equal(JSON.stringify(event).includes(SECRET), false);
 });
@@ -369,6 +375,109 @@ test('audit whitelists only a valid reason_code and never leaks model-controlled
   });
   assert.equal(invalid.reason_code, null);
   assert.equal(JSON.stringify(invalid).includes(SECRET), false);
+});
+
+test('audit records only closed feedback code and status metadata for enforced outcomes', () => {
+  const cases = [
+    [{
+      judgeResult: makeJudgeResult({
+        decision: 'deny',
+        risk: 'high',
+        authorization: 'low',
+        reason_code: 'out_of_scope',
+      }),
+      normalized: {
+        kind: 'deny',
+        verdict: makeJudgeResult({
+          decision: 'deny',
+          risk: 'high',
+          authorization: 'low',
+          reason_code: 'out_of_scope',
+        }).verdict,
+      },
+      mode: 'autonomous',
+      enforcement: 'enforce',
+    }, 'out_of_scope', 'blocked'],
+    [{
+      judgeResult: makeJudgeResult({
+        decision: 'review',
+        risk: 'medium',
+        authorization: 'medium',
+        reason_code: 'authorization_missing',
+      }),
+      normalized: {
+        kind: 'review',
+        verdict: makeJudgeResult({
+          decision: 'review',
+          risk: 'medium',
+          authorization: 'medium',
+          reason_code: 'authorization_missing',
+        }).verdict,
+      },
+      mode: 'supervised',
+      enforcement: 'enforce',
+    }, 'authorization_missing', 'approval_required'],
+    [{
+      judgeResult: undefined,
+      normalized: { kind: 'failure', feedback_code: 'judge_unavailable', reason: SECRET },
+      mode: 'autonomous',
+      enforcement: 'enforce',
+    }, 'judge_unavailable', 'blocked'],
+    [{
+      judgeResult: makeJudgeResult(),
+      normalized: {
+        kind: 'review',
+        local_guard: true,
+        verdict: makeJudgeResult().verdict,
+      },
+      mode: 'supervised',
+      enforcement: 'enforce',
+    }, 'local_policy_review', 'approval_required'],
+  ];
+
+  for (const [input, feedbackCode, feedbackStatus] of cases) {
+    const event = buildAuditEvent({
+      action: makeAction(),
+      latencyMs: 1,
+      ...input,
+      feedback: SECRET,
+      blockReason: SECRET,
+      approvalDescription: SECRET,
+    });
+    assert.equal(event.feedback_code, feedbackCode);
+    assert.equal(event.feedback_status, feedbackStatus);
+    assert.equal(JSON.stringify(event).includes(SECRET), false);
+  }
+});
+
+test('audit keeps feedback metadata null for allow and shadow outcomes', () => {
+  for (const input of [
+    {
+      judgeResult: makeJudgeResult(),
+      normalized: { kind: 'allow', verdict: makeJudgeResult().verdict },
+      mode: 'autonomous',
+      enforcement: 'enforce',
+    },
+    {
+      judgeResult: makeJudgeResult({
+        decision: 'deny',
+        reason_code: 'out_of_scope',
+      }),
+      normalized: {
+        kind: 'deny',
+        verdict: makeJudgeResult({
+          decision: 'deny',
+          reason_code: 'out_of_scope',
+        }).verdict,
+      },
+      mode: 'autonomous',
+      enforcement: 'shadow',
+    },
+  ]) {
+    const event = buildAuditEvent({ action: makeAction(), latencyMs: 1, ...input });
+    assert.equal(event.feedback_code, null);
+    assert.equal(event.feedback_status, null);
+  }
 });
 
 test('buildAuditEvent never evaluates hostile getters or leaks build failures', () => {
@@ -424,6 +533,8 @@ test('writer re-applies the whitelist to malicious caller-supplied audit fields'
     reason: SECRET,
     unknown: SECRET,
     rationale: `caller replaced rationale with ${SECRET}`,
+    feedback_code: SECRET,
+    feedback_status: SECRET,
   });
 
   assert.equal(await createAuditWriter({ filePath }).write(event), true);
@@ -433,6 +544,8 @@ test('writer re-applies the whitelist to malicious caller-supplied audit fields'
   assert.deepEqual(Object.keys(parsed), AUDIT_KEYS);
   assert.equal(raw.includes(SECRET), false);
   assert.equal(parsed.rationale, OMITTED_RATIONALE);
+  assert.equal(parsed.feedback_code, null);
+  assert.equal(parsed.feedback_status, null);
   for (const key of [
     'prompt',
     'userPrompt',

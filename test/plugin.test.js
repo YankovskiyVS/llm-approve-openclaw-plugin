@@ -7,6 +7,10 @@ import defaultPlugin, {
 import { createActionJudgePlugin } from '../src/plugin.js';
 import { createContextStore } from '../src/context-store.js';
 import {
+  createApprovalDescription,
+  createBlockFeedback,
+} from '../src/feedback.js';
+import {
   APPROVAL_TIMEOUT_MS,
   MAX_TRUSTED_PROMPT_BYTES,
   PLUGIN_ID,
@@ -158,21 +162,29 @@ function capturePrompt(harness, prompt = 'Read status.', runId = 'run-1', extras
   return harness.capture({ prompt, ...extras.event }, { runId, ...extras.ctx });
 }
 
-function assertApproval(result, expectedParams) {
+function assertApproval(
+  result,
+  expectedParams,
+  expectedCode = 'invalid_judge_response',
+  expectedSeverity = 'critical',
+) {
   assert.deepEqual(result.params, expectedParams);
   assert.deepEqual(result.requireApproval, {
     title: 'LLM action judge review required',
-    description: 'LLM action judge could not safely allow this tool call. Approve this call once to continue.',
-    severity: 'critical',
+    description: createApprovalDescription(expectedCode),
+    severity: expectedSeverity,
     timeoutMs: APPROVAL_TIMEOUT_MS,
     timeoutBehavior: 'deny',
     pluginId: PLUGIN_ID,
   });
 }
 
-function assertBlocked(result) {
+function assertBlocked(result, expectedCode = undefined) {
   assert.equal(result.block, true);
   assert.equal(typeof result.blockReason, 'string');
+  if (expectedCode !== undefined) {
+    assert.equal(result.blockReason, createBlockFeedback(expectedCode));
+  }
   assert.equal(Object.hasOwn(result, 'requireApproval'), false);
 }
 
@@ -451,6 +463,10 @@ test('locally unsafe model allow is normalized to review before mapping and audi
   const result = await harness.beforeTool(call.event, call.ctx);
 
   assert.deepEqual(result.params, call.event.params);
+  assert.equal(
+    result.requireApproval.description,
+    createApprovalDescription('local_policy_review'),
+  );
   assert.equal(result.requireApproval.severity, 'warning');
   assert.equal(result.requireApproval.timeoutBehavior, 'deny');
   assert.equal(harness.auditEvents.length, 1);
@@ -475,8 +491,8 @@ test('local surface guard catches an active CI write despite a confident model a
 
       const result = await harness.beforeTool(call.event, call.ctx);
 
-      if (mode === 'autonomous') assertBlocked(result);
-      else assertApproval(result, call.event.params);
+      if (mode === 'autonomous') assertBlocked(result, 'local_policy_review');
+      else assertApproval(result, call.event.params, 'local_policy_review');
       assert.equal(harness.auditEvents[0].decision, 'allow');
       assert.equal(harness.auditEvents[0].outcome, 'review');
     });
@@ -536,8 +552,8 @@ test('local surface guard catches browser upload and auth-policy edits in both m
 
         const result = await harness.beforeTool(call.event, call.ctx);
 
-        if (mode === 'autonomous') assertBlocked(result);
-        else assertApproval(result, call.event.params);
+        if (mode === 'autonomous') assertBlocked(result, 'local_policy_review');
+        else assertApproval(result, call.event.params, 'local_policy_review');
         assert.equal(harness.auditEvents[0].decision, 'allow');
         assert.equal(harness.auditEvents[0].outcome, 'review');
       }
@@ -741,8 +757,12 @@ test('audit cannot pollute Object.prototype after the final allow check', async 
       }
 
       if (mode === 'autonomous') {
-        assertBlocked(result);
+        assertBlocked(result, 'local_policy_review');
       } else {
+        assert.equal(
+          result.requireApproval.description,
+          createApprovalDescription('local_policy_review'),
+        );
         assert.equal(result.requireApproval.timeoutBehavior, 'deny');
         assert.equal(inheritedRequest, undefined);
       }
@@ -761,7 +781,7 @@ test('a credential-redacted action can never be auto-approved by an allow verdic
 
   const result = await harness.beforeTool(call.event, call.ctx);
 
-  assertApproval(result, call.event.params);
+  assertApproval(result, call.event.params, 'opaque_or_unverifiable');
   assert.equal(client.calls[0].envelope.params.command, '[REDACTED]');
   assert.equal(harness.auditEvents[0].decision, 'allow');
   assert.equal(harness.auditEvents[0].outcome, 'review');
@@ -777,7 +797,7 @@ test('a truncated action can never be auto-approved by an allow verdict', async 
 
   const result = await harness.beforeTool(call.event, call.ctx);
 
-  assertApproval(result, call.event.params);
+  assertApproval(result, call.event.params, 'opaque_or_unverifiable');
   assert.equal(client.calls[0].envelope.params.command.endsWith('[TRUNCATED]'), true);
   assert.equal(harness.auditEvents[0].decision, 'allow');
   assert.equal(harness.auditEvents[0].outcome, 'review');
@@ -809,25 +829,27 @@ test('explicit deny blocks in autonomous and supervised modes', async (t) => {
         decision: 'deny',
         risk: 'critical',
         authorization: 'low',
+        reason_code: 'out_of_scope',
         rationale: 'The action is not authorized.',
       });
       const harness = setup({ pluginConfig: { mode, enforcement: 'enforce' }, client });
       capturePrompt(harness);
       const call = callData();
       const result = await harness.beforeTool(call.event, call.ctx);
-      assertBlocked(result);
+      assertBlocked(result, 'out_of_scope');
       assert.equal(Object.hasOwn(result, 'params'), false);
     });
   }
 });
 
-test('autonomous review and every judge failure path blocks', async (t) => {
+test('autonomous review and every judge failure path use the classified safe feedback', async (t) => {
   const cases = [
-    ['review', verdictClient({ decision: 'review', risk: 'medium', authorization: 'medium' })],
-    ['client error', { async review() { return { ok: false, reason: PROMPT_SECRET, latencyMs: 3 }; } }],
-    ['client throw', { review() { throw new Error(PROMPT_SECRET); } }],
-    ['client rejection', { async review() { throw new Error(PROMPT_SECRET); } }],
-    ['parser error', { async review() { return { ok: true, text: '{invalid', latencyMs: 1 }; } }],
+    ['review', verdictClient({ decision: 'review', risk: 'medium', authorization: 'medium' }), 'other_policy_risk'],
+    ['client error', { async review() { return { ok: false, reason: PROMPT_SECRET, latencyMs: 3 }; } }, 'judge_unavailable'],
+    ['client throw', { review() { throw new Error(PROMPT_SECRET); } }, 'judge_unavailable'],
+    ['client rejection', { async review() { throw new Error(PROMPT_SECRET); } }, 'judge_unavailable'],
+    ['client undefined', { async review() { return undefined; } }, 'judge_unavailable'],
+    ['parser error', { async review() { return { ok: true, text: '{invalid', latencyMs: 1 }; } }, 'invalid_judge_response'],
     ['wrong policy', {
       async review(input) {
         return {
@@ -836,7 +858,7 @@ test('autonomous review and every judge failure path blocks', async (t) => {
           latencyMs: 1,
         };
       },
-    }],
+    }, 'invalid_judge_response'],
     ['wrong hash', {
       async review(input) {
         return {
@@ -845,10 +867,10 @@ test('autonomous review and every judge failure path blocks', async (t) => {
           latencyMs: 1,
         };
       },
-    }],
+    }, 'invalid_judge_response'],
   ];
 
-  for (const [name, client] of cases) {
+  for (const [name, client, expectedCode] of cases) {
     await t.test(name, async () => {
       const harness = setup({
         pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
@@ -857,7 +879,7 @@ test('autonomous review and every judge failure path blocks', async (t) => {
       capturePrompt(harness);
       const call = callData();
       const result = await harness.beforeTool(call.event, call.ctx);
-      assertBlocked(result);
+      assertBlocked(result, expectedCode);
       assert.equal(harness.auditEvents.length, 1);
       assert.equal(JSON.stringify(harness.auditEvents[0]).includes(PROMPT_SECRET), false);
     });
@@ -1061,22 +1083,23 @@ test('hostile normalizer cannot rewrite a frozen validated deny verdict into all
   });
 });
 
-test('supervised review, client failures, and missing provider return complete one-call approval', async (t) => {
+test('supervised review, client failures, and missing provider return classified one-call approval', async (t) => {
   const cases = [
-    ['review', verdictClient({ decision: 'review', risk: 'critical', authorization: 'unknown' }), {}, 1],
-    ['client error', { async review() { return { ok: false, reason: 'request failed', latencyMs: 4 }; } }, {}, 1],
-    ['client throw', { review() { throw new Error(PROMPT_SECRET); } }, {}, 1],
-    ['parser error', { async review() { return { ok: true, text: 'not json', latencyMs: 4 }; } }, {}, 1],
-    ['missing provider', NO_INJECTION, { providerConfig: NO_PROVIDER }, 0],
+    ['review', verdictClient({ decision: 'review', risk: 'critical', authorization: 'unknown' }), {}, 1, 'other_policy_risk'],
+    ['client error', { async review() { return { ok: false, reason: 'request failed', latencyMs: 4 }; } }, {}, 1, 'judge_unavailable'],
+    ['client throw', { review() { throw new Error(PROMPT_SECRET); } }, {}, 1, 'judge_unavailable'],
+    ['client undefined', { async review() { return undefined; } }, {}, 1, 'judge_unavailable'],
+    ['parser error', { async review() { return { ok: true, text: 'not json', latencyMs: 4 }; } }, {}, 1, 'invalid_judge_response'],
+    ['missing provider', NO_INJECTION, { providerConfig: NO_PROVIDER }, 0, 'judge_unavailable'],
   ];
 
-  for (const [name, client, options, expectedAuditEvents] of cases) {
+  for (const [name, client, options, expectedAuditEvents, expectedCode] of cases) {
     await t.test(name, async () => {
       const harness = setup({ client, ...options });
       capturePrompt(harness);
       const call = callData();
       const result = await harness.beforeTool(call.event, call.ctx);
-      assertApproval(result, call.event.params);
+      assertApproval(result, call.event.params, expectedCode);
       assert.notStrictEqual(result.params, call.event.params);
       assert.equal(harness.registrations.length, 2);
       assert.equal(harness.auditEvents.length, expectedAuditEvents);
@@ -1189,8 +1212,8 @@ test('ENV profiles map judge failures to shadow, approval, and block', async (t)
       const call = callData();
       const result = await harness.beforeTool(call.event, call.ctx);
       if (expected === 'shadow') assert.equal(result, undefined);
-      if (expected === 'approval') assertApproval(result, call.event.params);
-      if (expected === 'block') assertBlocked(result);
+      if (expected === 'approval') assertApproval(result, call.event.params, 'judge_unavailable');
+      if (expected === 'block') assertBlocked(result, 'judge_unavailable');
       assert.equal(harness.auditEvents.length, 1);
       assert.equal(harness.auditEvents[0].enforcement, profile === 'shadow' ? 'shadow' : 'enforce');
     });
@@ -1210,7 +1233,7 @@ test('invalid ENV keeps both hooks but ignores injected allow and requires appro
 
   assert.equal(harness.registrations.length, 2);
   assert.equal(client.calls.length, 0);
-  assertApproval(result, call.event.params);
+  assertApproval(result, call.event.params, 'judge_unavailable');
   assert.equal(harness.auditEvents.length, 0);
   assert.deepEqual(harness.logs, ['LLM action judge setup failed']);
 });
@@ -1226,7 +1249,11 @@ test('environment is snapshotted once during registration', async () => {
   capturePrompt(harness);
   const call = callData();
 
-  assertApproval(await harness.beforeTool(call.event, call.ctx), call.event.params);
+  assertApproval(
+    await harness.beforeTool(call.event, call.ctx),
+    call.event.params,
+    'judge_unavailable',
+  );
   assert.equal(harness.auditEvents[0].mode, 'supervised');
 });
 
@@ -1254,7 +1281,11 @@ test('dependency injection cannot replace the production settings resolver', asy
   const call = callData();
 
   assert.equal(injectedCalls, 0);
-  assertApproval(await harness.beforeTool(call.event, call.ctx), call.event.params);
+  assertApproval(
+    await harness.beforeTool(call.event, call.ctx),
+    call.event.params,
+    'judge_unavailable',
+  );
 });
 
 test('info log level emits one fixed registration message without runtime values', () => {
@@ -1287,7 +1318,7 @@ test('invalid plugin config still registers and uses permanent supervised enforc
 
   const result = await harness.beforeTool(call.event, call.ctx);
 
-  assertApproval(result, call.event.params);
+  assertApproval(result, call.event.params, 'judge_unavailable');
   assert.equal(harness.logs.length, 1);
   assert.equal(typeof harness.logs[0], 'string');
   assert.ok(harness.logs[0].length <= 80);
@@ -1333,7 +1364,11 @@ test('missing, invalid, and throwing Cloud.ru client configuration still registe
       assert.equal(harness.registrations.length, 2);
       capturePrompt(harness);
       const call = callData();
-      assertApproval(await harness.beforeTool(call.event, call.ctx), call.event.params);
+      assertApproval(
+        await harness.beforeTool(call.event, call.ctx),
+        call.event.params,
+        'judge_unavailable',
+      );
       assert.equal(harness.auditEvents.length, expectedAuditEvents);
     });
   }
@@ -1454,7 +1489,11 @@ test('store, client, parser, audit, and logger hostile getter/throw paths never 
       const harness = setup({ client });
       capturePrompt(harness);
       const call = callData();
-      assertApproval(await harness.beforeTool(call.event, call.ctx), call.event.params);
+      assertApproval(
+        await harness.beforeTool(call.event, call.ctx),
+        call.event.params,
+        'judge_unavailable',
+      );
     }
   });
 

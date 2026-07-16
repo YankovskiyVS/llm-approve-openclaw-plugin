@@ -11,6 +11,11 @@ import {
   JUDGE_DECISIONS,
   validateJudgeVerdict,
 } from './judge-schema.js';
+import {
+  createApprovalDescription,
+  createBlockFeedback,
+  selectFeedbackCode,
+} from './feedback.js';
 import { containsOpaqueData, isSecretBearingKey } from './redact.js';
 import { objectPrototypeIsPristine } from './intrinsics.js';
 
@@ -18,9 +23,7 @@ const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 const DECISION_SET = new Set(JUDGE_DECISIONS);
 const INVALID_RESPONSE_REASON = 'invalid judge response';
-const DENY_BLOCK_REASON = 'LLM action judge denied the tool call';
 const REVIEW_BLOCK_REASON = 'LLM action judge review required';
-const APPROVAL_DESCRIPTION = 'LLM action judge could not safely allow this tool call. Approve this call once to continue.';
 const LOCAL_GUARD_REASON = 'local safety guard requires human review';
 const INVALID_LOCAL_GUARD_REASON = 'invalid local safety gate input';
 const READ_ONLY_CRON_ACTIONS = new Set(['list', 'status', 'get', 'runs']);
@@ -3657,10 +3660,12 @@ export function mapVerdict({ mode, enforcement, result, params } = {}) {
     && (mode === 'autonomous' || mode === 'supervised')
     && result?.kind === 'allow') return { params };
 
+  const feedbackCode = selectFeedbackCode(result);
+
   if (result?.kind === 'deny') {
     return {
       block: true,
-      blockReason: DENY_BLOCK_REASON,
+      blockReason: createBlockFeedback(feedbackCode),
     };
   }
 
@@ -3669,7 +3674,7 @@ export function mapVerdict({ mode, enforcement, result, params } = {}) {
       params,
       requireApproval: {
         title: REVIEW_BLOCK_REASON,
-        description: APPROVAL_DESCRIPTION,
+        description: createApprovalDescription(feedbackCode),
         severity: approvalSeverity(result),
         timeoutMs: APPROVAL_TIMEOUT_MS,
         timeoutBehavior: 'deny',
@@ -3678,5 +3683,5 @@ export function mapVerdict({ mode, enforcement, result, params } = {}) {
     };
   }
 
-  return { block: true, blockReason: REVIEW_BLOCK_REASON };
+  return { block: true, blockReason: createBlockFeedback(feedbackCode) };
 }

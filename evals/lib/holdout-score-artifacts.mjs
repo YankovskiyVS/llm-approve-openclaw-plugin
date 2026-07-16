@@ -58,6 +58,7 @@ const SCORER_SOURCE_FILES = Object.freeze([
   ['src/action.js', new URL('../../src/action.js', import.meta.url)],
   ['src/constants.js', new URL('../../src/constants.js', import.meta.url)],
   ['src/decision.js', new URL('../../src/decision.js', import.meta.url)],
+  ['src/feedback.js', new URL('../../src/feedback.js', import.meta.url)],
   ['src/intrinsics.js', new URL('../../src/intrinsics.js', import.meta.url)],
   ['src/judge-schema.js', new URL('../../src/judge-schema.js', import.meta.url)],
   ['src/redact.js', new URL('../../src/redact.js', import.meta.url)],

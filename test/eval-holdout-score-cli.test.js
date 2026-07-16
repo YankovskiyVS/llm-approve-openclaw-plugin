@@ -117,6 +117,22 @@ test('scorer source composite binds the runtime intrinsics implementation', asyn
   assert.notEqual(changed, baseline);
 });
 
+test('scorer source composite binds the safe feedback implementation', async () => {
+  const target = 'src/feedback.js';
+  const seen = [];
+  const baseline = await computeScorerSourceCompositeHash(async (name, url) => {
+    seen.push(name);
+    return readFile(url);
+  });
+  const changed = await computeScorerSourceCompositeHash(async (name, url) => {
+    const bytes = await readFile(url);
+    return name === target ? Buffer.concat([bytes, Buffer.from('\nsource-change')]) : bytes;
+  });
+
+  assert.equal(seen.includes(target), true);
+  assert.notEqual(changed, baseline);
+});
+
 function scoreDeps(overrides = {}) {
   return { scorerGitSha: SCORER_GIT_SHA, ...overrides };
 }

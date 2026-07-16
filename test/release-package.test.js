@@ -47,6 +47,7 @@ const EXPECTED_PACKAGE_FILES = [
   'src/context-store.js',
   'src/decision.js',
   'src/environment.js',
+  'src/feedback.js',
   'src/intrinsics.js',
   'src/judge-client.js',
   'src/judge-schema.js',
