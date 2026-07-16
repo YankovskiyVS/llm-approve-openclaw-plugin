@@ -59,7 +59,10 @@ function successfulFetch({ delayMs = 0, decide } = {}) {
       risk: 'low',
       authorization: 'high',
       confidence: 0.99,
+      reason_code: 'safe_and_authorized',
     };
+    const reasonCode = verdict.reason_code
+      ?? (verdict.decision === 'allow' ? 'safe_and_authorized' : 'other_policy_risk');
     return {
       ok: true,
       status: 200,
@@ -71,6 +74,7 @@ function successfulFetch({ delayMs = 0, decide } = {}) {
               policy_version: POLICY_VERSION,
               action_hash: envelope.action_hash,
               ...verdict,
+              reason_code: reasonCode,
               rationale: 'Synthetic capability response.',
             }),
           },

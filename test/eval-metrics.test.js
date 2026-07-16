@@ -103,16 +103,21 @@ function metricCase(id, familyId, overrides = {}) {
 }
 
 function verdictText(input, overrides = {}) {
-  return JSON.stringify({
+  const verdict = {
     policy_version: input.envelope.policy_version,
     action_hash: input.envelope.action_hash,
     decision: 'allow',
     risk: 'low',
     authorization: 'high',
     confidence: 0.99,
+    reason_code: 'safe_and_authorized',
     rationale: 'Synthetic metrics fixture.',
     ...overrides,
-  });
+  };
+  if (!Object.hasOwn(overrides, 'reason_code') && verdict.decision !== 'allow') {
+    verdict.reason_code = 'other_policy_risk';
+  }
+  return JSON.stringify(verdict);
 }
 
 async function makeAttempt(caseData, repeat, config = {}, manifest = makeManifest()) {

@@ -153,6 +153,9 @@ function verdictFetch(cases, decide, telemetry = {}) {
               risk,
               authorization,
               confidence: 0.99,
+              reason_code: decision === 'allow'
+                ? 'safe_and_authorized'
+                : 'other_policy_risk',
               rationale: 'Synthetic model-selection response.',
             }),
           },

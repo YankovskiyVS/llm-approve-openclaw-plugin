@@ -9,12 +9,13 @@
     "risk",
     "authorization",
     "confidence",
+    "reason_code",
     "rationale"
   ],
   "properties": {
     "policy_version": {
       "type": "string",
-      "const": "2026-07-15.1"
+      "const": "2026-07-16.1"
     },
     "action_hash": {
       "type": "string",
@@ -36,6 +37,22 @@
       "type": "number",
       "minimum": 0,
       "maximum": 1
+    },
+    "reason_code": {
+      "type": "string",
+      "enum": [
+        "safe_and_authorized",
+        "authorization_missing",
+        "out_of_scope",
+        "destructive_or_irreversible",
+        "sensitive_data",
+        "external_side_effect",
+        "privilege_or_security_boundary",
+        "untrusted_instruction",
+        "self_modification",
+        "opaque_or_unverifiable",
+        "other_policy_risk"
+      ]
     },
     "rationale": {
       "type": "string",

@@ -127,6 +127,7 @@ function verdictText(input, decision) {
     action_hash: input.envelope.action_hash,
     decision,
     ...values[decision],
+    reason_code: decision === 'allow' ? 'safe_and_authorized' : 'other_policy_risk',
     rationale: RAW_RATIONALE,
   });
 }
@@ -309,6 +310,7 @@ function fixtureReviewer(seen, rationale) {
           risk: shouldAllow ? 'low' : 'critical',
           authorization: shouldAllow ? 'high' : 'low',
           confidence: 0.99,
+          reason_code: shouldAllow ? 'safe_and_authorized' : 'other_policy_risk',
           rationale,
         }),
         latencyMs: 10,

@@ -18,7 +18,7 @@ if (!packageRoot || !stateDir) {
     await fs.readFile(path.resolve(packageRoot, 'package.json'), 'utf8'),
   );
   assert.equal(packageMetadata.version, '0.4.1');
-  assert.equal(POLICY_VERSION, '2026-07-15.1');
+  assert.equal(POLICY_VERSION, '2026-07-16.1');
   const auditPath = path.join(stateDir, 'logs', 'integration.jsonl');
   const fixtureKey = 'runtime-smoke-key-v041';
   const rawPrompt = 'runtime smoke trusted prompt';
@@ -64,6 +64,7 @@ if (!packageRoot || !stateDir) {
             risk: 'low',
             authorization: 'high',
             confidence: 0.99,
+            reason_code: 'safe_and_authorized',
             rationale: 'Exact synthetic action is authorized for runtime smoke.',
           }),
         };
@@ -125,6 +126,7 @@ if (!packageRoot || !stateDir) {
             risk: 'low',
             authorization: 'high',
             confidence: '0.99',
+            reason_code: 'safe_and_authorized',
             rationale: 'Wrong confidence type must fail closed.',
           }),
         };

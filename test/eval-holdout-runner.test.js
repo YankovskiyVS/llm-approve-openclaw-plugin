@@ -116,6 +116,7 @@ function verdictText(input) {
     risk: 'low',
     authorization: 'high',
     confidence: 0.99,
+    reason_code: 'safe_and_authorized',
     rationale: 'Blind runner fixture verdict.',
   });
 }

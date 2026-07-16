@@ -21,6 +21,7 @@ const VERDICT = JSON.stringify({
   risk: 'low',
   authorization: 'high',
   confidence: 0.99,
+  reason_code: 'safe_and_authorized',
   rationale: 'Explicit low-risk workspace read.',
 });
 

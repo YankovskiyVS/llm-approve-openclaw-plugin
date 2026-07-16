@@ -29,16 +29,21 @@ const VALID_PROVIDER = Object.freeze({
 });
 
 function verdictText(input, overrides = {}) {
-  return JSON.stringify({
+  const verdict = {
     policy_version: POLICY_VERSION,
     action_hash: input.envelope.action_hash,
     decision: 'allow',
     risk: 'low',
     authorization: 'high',
     confidence: 0.99,
+    reason_code: 'safe_and_authorized',
     rationale: 'The exact requested action is authorized.',
     ...overrides,
-  });
+  };
+  if (!Object.hasOwn(overrides, 'reason_code') && verdict.decision !== 'allow') {
+    verdict.reason_code = 'other_policy_risk';
+  }
+  return JSON.stringify(verdict);
 }
 
 function verdictClient(overrides = {}) {
@@ -859,18 +864,23 @@ test('autonomous review and every judge failure path blocks', async (t) => {
   }
 });
 
-test('injected parser cannot allow an independently invalid seven-field verdict', async (t) => {
+test('injected parser cannot allow an independently invalid eight-field verdict', async (t) => {
   function parsedVerdict(expectedHash, overrides = {}) {
-    return {
+    const verdict = {
       policy_version: POLICY_VERSION,
       action_hash: expectedHash,
       decision: 'allow',
       risk: 'low',
       authorization: 'high',
       confidence: 0.99,
+      reason_code: 'safe_and_authorized',
       rationale: 'The exact requested action is authorized.',
       ...overrides,
     };
+    if (!Object.hasOwn(overrides, 'reason_code') && verdict.decision !== 'allow') {
+      verdict.reason_code = 'other_policy_risk';
+    }
+    return verdict;
   }
 
   const cases = [
@@ -886,6 +896,10 @@ test('injected parser cannot allow an independently invalid seven-field verdict'
     ['invalid decision enum', ({ expectedHash }) => parsedVerdict(expectedHash, { decision: 'ALLOW' })],
     ['invalid risk enum', ({ expectedHash }) => parsedVerdict(expectedHash, { risk: 'safe' })],
     ['invalid authorization enum', ({ expectedHash }) => parsedVerdict(expectedHash, { authorization: 'none' })],
+    ['invalid reason code enum', ({ expectedHash }) => parsedVerdict(expectedHash, { reason_code: 'safe' })],
+    ['allow with non-safe reason code', ({ expectedHash }) => parsedVerdict(expectedHash, { reason_code: 'authorization_missing' })],
+    ['review with safe reason code', ({ expectedHash }) => parsedVerdict(expectedHash, { decision: 'review', reason_code: 'safe_and_authorized' })],
+    ['deny with safe reason code', ({ expectedHash }) => parsedVerdict(expectedHash, { decision: 'deny', reason_code: 'safe_and_authorized' })],
     ['wrong policy type', ({ expectedHash }) => parsedVerdict(expectedHash, { policy_version: 1 })],
     ['wrong hash type', ({ expectedHash }) => parsedVerdict(expectedHash, { action_hash: { expectedHash } })],
     ['wrong rationale type', ({ expectedHash }) => parsedVerdict(expectedHash, { rationale: true })],
@@ -948,6 +962,7 @@ test('injected parser cannot pass a proxy or accessor verdict to the safety gate
       risk: 'low',
       authorization: 'high',
       confidence: 0.99,
+      reason_code: 'safe_and_authorized',
       rationale: 'The exact requested action is authorized.',
     };
   }
@@ -1005,6 +1020,7 @@ test('hostile normalizer cannot rewrite a frozen validated deny verdict into all
     risk: 'critical',
     authorization: 'low',
     confidence: 0.99,
+    reason_code: 'other_policy_risk',
     rationale: 'The action is not authorized.',
   });
   const harness = setup({
@@ -1040,6 +1056,7 @@ test('hostile normalizer cannot rewrite a frozen validated deny verdict into all
     risk: 'critical',
     authorization: 'low',
     confidence: 0.99,
+    reason_code: 'other_policy_risk',
     rationale: 'The action is not authorized.',
   });
 });

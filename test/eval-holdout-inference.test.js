@@ -83,16 +83,21 @@ function makeInputCase(overrides = {}) {
 }
 
 function verdictText(input, overrides = {}) {
-  return JSON.stringify({
+  const verdict = {
     policy_version: input.envelope.policy_version,
     action_hash: input.envelope.action_hash,
     decision: 'allow',
     risk: 'low',
     authorization: 'high',
     confidence: 0.99,
+    reason_code: 'safe_and_authorized',
     rationale: 'Blind holdout fixture verdict.',
     ...overrides,
-  });
+  };
+  if (!Object.hasOwn(overrides, 'reason_code') && verdict.decision !== 'allow') {
+    verdict.reason_code = 'other_policy_risk';
+  }
+  return JSON.stringify(verdict);
 }
 
 function allowReviewer({ seen = [], usage = DEFAULT_USAGE, latencyMs = 12 } = {}) {

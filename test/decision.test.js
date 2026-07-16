@@ -9,6 +9,7 @@ import {
 import {
   JUDGE_AUTHORIZATIONS,
   JUDGE_DECISIONS,
+  JUDGE_REASON_CODES,
   JUDGE_RISKS,
   JUDGE_VERDICT_KEYS,
 } from '../src/judge-schema.js';
@@ -24,16 +25,21 @@ import {
 const EXPECTED_HASH = `sha256:${'a'.repeat(64)}`;
 
 function verdict(overrides = {}) {
-  return {
+  const candidate = {
     policy_version: POLICY_VERSION,
     action_hash: EXPECTED_HASH,
     decision: 'allow',
     risk: 'low',
     authorization: 'high',
     confidence: 0.98,
+    reason_code: 'safe_and_authorized',
     rationale: 'Scoped read requested by the user.',
     ...overrides,
   };
+  if (!Object.hasOwn(overrides, 'reason_code') && candidate.decision !== 'allow') {
+    candidate.reason_code = 'other_policy_risk';
+  }
+  return candidate;
 }
 
 function localAction(toolName, params, sessionKey = 'agent:main:main') {
@@ -118,6 +124,9 @@ test('buildJudgeMessages uses schema vocabulary and sends only system and user m
     `Allowed decision values: ${JUDGE_DECISIONS.join(', ')}.`,
     `Allowed risk values: ${JUDGE_RISKS.join(', ')}.`,
     `Allowed authorization values: ${JUDGE_AUTHORIZATIONS.join(', ')}.`,
+    `Allowed reason_code values: ${JUDGE_REASON_CODES.join(', ')}.`,
+    'decision=allow requires reason_code=safe_and_authorized.',
+    'decision=review or decision=deny forbids reason_code=safe_and_authorized.',
   ]) {
     assert.equal(policy.includes(required), true, `schema vocabulary omitted: ${required}`);
   }
@@ -241,7 +250,7 @@ test('buildJudgeMessages fails safely for invalid required input', () => {
   }
 });
 
-test('parseJudgeResponse accepts exactly one valid seven-field object', () => {
+test('parseJudgeResponse accepts exactly one valid eight-field object', () => {
   const expected = verdict();
 
   const result = parseJudgeResponse(` \n\t${JSON.stringify(expected)}\r `, {
@@ -256,6 +265,7 @@ test('parseJudgeResponse accepts exactly one valid seven-field object', () => {
     'decision',
     'policy_version',
     'rationale',
+    'reason_code',
     'risk',
   ]);
 });
@@ -289,7 +299,7 @@ test('parseJudgeResponse rejects every missing key and every extra key', () => {
 });
 
 test('parseJudgeResponse rejects duplicate keys including escaped aliases', () => {
-  const tail = `"risk":"low","authorization":"high","confidence":0.98,"rationale":"ok"}`;
+  const tail = `"risk":"low","authorization":"high","confidence":0.98,"reason_code":"safe_and_authorized","rationale":"ok"}`;
   const duplicate = `{"policy_version":"${POLICY_VERSION}","action_hash":"${EXPECTED_HASH}","decision":"allow","decision":"deny",${tail}`;
   const escapedDuplicate = `{"policy_version":"${POLICY_VERSION}","action_hash":"${EXPECTED_HASH}","decision":"allow","deci\\u0073ion":"deny",${tail}`;
 
@@ -298,7 +308,7 @@ test('parseJudgeResponse rejects duplicate keys including escaped aliases', () =
 });
 
 test('parseJudgeResponse rejects duplicate keys before parsing the full object', () => {
-  const tail = `"risk":"low","authorization":"high","confidence":0.98,"rationale":"ok"}`;
+  const tail = `"risk":"low","authorization":"high","confidence":0.98,"reason_code":"safe_and_authorized","rationale":"ok"}`;
   const duplicate = `{"policy_version":"${POLICY_VERSION}","action_hash":"${EXPECTED_HASH}","decision":"allow","decision":"deny",${tail}`;
   const originalParse = JSON.parse;
   let parsedFullObject = false;
@@ -333,6 +343,7 @@ test('parseJudgeResponse rejects wrong field types including boolean confidence'
     { decision: null },
     { risk: [] },
     { authorization: {} },
+    { reason_code: [] },
     { confidence: true },
     { confidence: '0.98' },
     { confidence: null },
@@ -347,7 +358,16 @@ test('parseJudgeResponse rejects every invalid enum and out-of-range confidence'
   for (const authorization of ['', 'none', 'HIGH']) {
     assertInvalid(verdict({ authorization }));
   }
+  for (const reason_code of ['', 'safe', 'SAFE_AND_AUTHORIZED']) {
+    assertInvalid(verdict({ reason_code }));
+  }
   for (const confidence of [-0.01, 1.01]) assertInvalid(verdict({ confidence }));
+});
+
+test('parseJudgeResponse rejects contradictory decision and reason_code pairs', () => {
+  assertInvalid(verdict({ decision: 'allow', reason_code: 'authorization_missing' }));
+  assertInvalid(verdict({ decision: 'review', reason_code: 'safe_and_authorized' }));
+  assertInvalid(verdict({ decision: 'deny', reason_code: 'safe_and_authorized' }));
 });
 
 test('parseJudgeResponse rejects malformed, mismatched, and non-lowercase hashes', () => {

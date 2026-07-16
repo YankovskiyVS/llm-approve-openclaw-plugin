@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import {
   JUDGE_AUTHORIZATIONS,
   JUDGE_DECISIONS,
+  JUDGE_REASON_CODES,
   JUDGE_RISKS,
   JUDGE_VERDICT_KEYS,
   JUDGE_VERDICT_SCHEMA,
@@ -16,16 +17,21 @@ import { POLICY_VERSION } from '../src/constants.js';
 const ACTION_HASH = `sha256:${'a'.repeat(64)}`;
 
 function verdict(overrides = {}) {
-  return {
+  const candidate = {
     policy_version: POLICY_VERSION,
     action_hash: ACTION_HASH,
     decision: 'allow',
     risk: 'low',
     authorization: 'high',
     confidence: 0.9,
+    reason_code: 'safe_and_authorized',
     rationale: 'The requested read is low risk and explicitly authorized.',
     ...overrides,
   };
+  if (!Object.hasOwn(overrides, 'reason_code') && candidate.decision !== 'allow') {
+    candidate.reason_code = 'other_policy_risk';
+  }
+  return candidate;
 }
 
 function assertDeepFrozen(value) {
@@ -49,6 +55,7 @@ test('exports one immutable draft-07 verdict contract and derived vocabulary', a
     'risk',
     'authorization',
     'confidence',
+    'reason_code',
     'rationale',
   ]);
   assert.deepEqual(JUDGE_VERDICT_SCHEMA.required, JUDGE_VERDICT_KEYS);
@@ -56,17 +63,31 @@ test('exports one immutable draft-07 verdict contract and derived vocabulary', a
   assert.deepEqual(JUDGE_DECISIONS, ['allow', 'deny', 'review']);
   assert.deepEqual(JUDGE_RISKS, ['low', 'medium', 'high', 'critical']);
   assert.deepEqual(JUDGE_AUTHORIZATIONS, ['unknown', 'low', 'medium', 'high']);
+  assert.deepEqual(JUDGE_REASON_CODES, [
+    'safe_and_authorized',
+    'authorization_missing',
+    'out_of_scope',
+    'destructive_or_irreversible',
+    'sensitive_data',
+    'external_side_effect',
+    'privilege_or_security_boundary',
+    'untrusted_instruction',
+    'self_modification',
+    'opaque_or_unverifiable',
+    'other_policy_risk',
+  ]);
   assert.equal(POLICY_VERSION, JUDGE_VERDICT_SCHEMA.properties.policy_version.const);
-  assert.equal(POLICY_VERSION, '2026-07-15.1');
+  assert.equal(POLICY_VERSION, '2026-07-16.1');
 
   assertDeepFrozen(JUDGE_VERDICT_SCHEMA);
   assertDeepFrozen(JUDGE_VERDICT_KEYS);
   assertDeepFrozen(JUDGE_DECISIONS);
   assertDeepFrozen(JUDGE_RISKS);
   assertDeepFrozen(JUDGE_AUTHORIZATIONS);
+  assertDeepFrozen(JUDGE_REASON_CODES);
 });
 
-test('accepts the exact seven-field verdict contract', () => {
+test('accepts the exact eight-field verdict contract', () => {
   assert.doesNotThrow(() => validateJudgeVerdict(verdict()));
 
   for (const decision of JUDGE_DECISIONS) {
@@ -83,6 +104,30 @@ test('accepts the exact seven-field verdict contract', () => {
   }
   for (const rationale of [' ', '\u0000', 'x'.repeat(500)]) {
     assert.doesNotThrow(() => validateJudgeVerdict(verdict({ rationale })));
+  }
+  for (const reason_code of JUDGE_REASON_CODES.slice(1)) {
+    assert.doesNotThrow(() => validateJudgeVerdict(verdict({
+      decision: 'review',
+      reason_code,
+    })));
+  }
+});
+
+test('rejects missing, unknown, and decision-incompatible reason codes', () => {
+  const missing = verdict();
+  delete missing.reason_code;
+
+  for (const candidate of [
+    missing,
+    verdict({ reason_code: 'unknown_code' }),
+    verdict({ decision: 'allow', reason_code: 'authorization_missing' }),
+    verdict({ decision: 'review', reason_code: 'safe_and_authorized' }),
+    verdict({ decision: 'deny', reason_code: 'safe_and_authorized' }),
+  ]) {
+    assert.throws(
+      () => validateJudgeVerdict(candidate),
+      (error) => error instanceof TypeError && error.message === 'invalid judge verdict',
+    );
   }
 });
 
@@ -122,6 +167,7 @@ test('rejects wrong types, closed-enum violations, ranges, policy, and hash shap
     verdict({ risk: 0 }),
     verdict({ authorization: 'admin' }),
     verdict({ authorization: null }),
+    verdict({ reason_code: null }),
     verdict({ confidence: -0.01 }),
     verdict({ confidence: 1.01 }),
     verdict({ confidence: Number.NaN }),
@@ -183,9 +229,10 @@ test('derives policy, keys, and enums only from the loaded schema', async () => 
     reversedKeys.map((key) => [key, schema.properties[key]]),
   );
   schema.properties.policy_version.const = 'schema-derived-test-policy';
-  schema.properties.decision.enum = ['permit', 'refuse', 'escalate'];
+  schema.properties.decision.enum = ['review', 'allow', 'deny'];
   schema.properties.risk.enum = ['minor', 'major'];
   schema.properties.authorization.enum = ['absent', 'present'];
+  schema.properties.reason_code.enum = ['other_policy_risk', 'safe_and_authorized'];
 
   const contract = createJudgeSchemaContract({
     readSchema() { return JSON.stringify(schema); },
@@ -197,13 +244,65 @@ test('derives policy, keys, and enums only from the loaded schema', async () => 
   assert.deepEqual(contract.decisions, schema.properties.decision.enum);
   assert.deepEqual(contract.risks, schema.properties.risk.enum);
   assert.deepEqual(contract.authorizations, schema.properties.authorization.enum);
+  assert.deepEqual(contract.reasonCodes, schema.properties.reason_code.enum);
   for (const value of [
     contract.verdictKeys,
     contract.decisions,
     contract.risks,
     contract.authorizations,
+    contract.reasonCodes,
   ]) {
     assert.equal(Object.isFrozen(value), true);
+  }
+});
+
+test('decision and reason compatibility is independent from enum order', async () => {
+  const schemaUrl = new URL('../schemas/judge-verdict.schema.json', import.meta.url);
+  const schema = JSON.parse(await readFile(schemaUrl, 'utf8'));
+  schema.properties.decision.enum = ['deny', 'review', 'allow'];
+  schema.properties.reason_code.enum = [
+    'authorization_missing',
+    'safe_and_authorized',
+    'other_policy_risk',
+  ];
+  const contract = createJudgeSchemaContract({
+    readSchema() { return JSON.stringify(schema); },
+  });
+
+  assert.doesNotThrow(() => contract.validateJudgeVerdict(verdict()));
+  assert.doesNotThrow(() => contract.validateJudgeVerdict(verdict({
+    decision: 'review',
+    reason_code: 'authorization_missing',
+  })));
+  for (const candidate of [
+    verdict({ decision: 'allow', reason_code: 'authorization_missing' }),
+    verdict({ decision: 'deny', reason_code: 'safe_and_authorized' }),
+  ]) {
+    assert.throws(
+      () => contract.validateJudgeVerdict(candidate),
+      (error) => error instanceof TypeError && error.message === 'invalid judge verdict',
+    );
+  }
+});
+
+test('semantic anchors are required for an available judge contract', async () => {
+  const schemaUrl = new URL('../schemas/judge-verdict.schema.json', import.meta.url);
+  const original = JSON.parse(await readFile(schemaUrl, 'utf8'));
+  for (const mutate of [
+    (schema) => { schema.properties.decision.enum = ['deny', 'review']; },
+    (schema) => { schema.properties.reason_code.enum = ['other_policy_risk']; },
+  ]) {
+    const schema = structuredClone(original);
+    mutate(schema);
+    const contract = createJudgeSchemaContract({
+      readSchema() { return JSON.stringify(schema); },
+    });
+    assert.equal(contract.schema, null);
+    assert.throws(
+      () => contract.validateJudgeVerdict(verdict()),
+      (error) => error instanceof TypeError
+        && error.message === 'judge verdict contract unavailable',
+    );
   }
 });
 
@@ -246,6 +345,7 @@ test('contains schema and dependency initialization failures until contract use'
         contract.decisions,
         contract.risks,
         contract.authorizations,
+        contract.reasonCodes,
       ]) {
         assert.deepEqual(value, []);
         assert.equal(Object.isFrozen(value), true);

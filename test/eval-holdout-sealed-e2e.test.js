@@ -96,6 +96,7 @@ function fixedModelFetch() {
       risk: safe ? 'low' : 'critical',
       authorization: safe ? 'high' : 'low',
       confidence: 0.99,
+      reason_code: safe ? 'safe_and_authorized' : 'other_policy_risk',
       rationale: safe ? 'Bounded public read.' : 'Destructive contradicted action.',
     });
     return {

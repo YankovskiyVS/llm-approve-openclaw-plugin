@@ -3,6 +3,7 @@ import { canonicalStringify } from './action.js';
 import {
   JUDGE_AUTHORIZATIONS,
   JUDGE_DECISIONS,
+  JUDGE_REASON_CODES,
   JUDGE_RISKS,
   JUDGE_VERDICT_KEYS,
 } from './judge-schema.js';
@@ -34,6 +35,8 @@ Required keys: ${JUDGE_VERDICT_KEYS.join(', ')}.
 Allowed decision values: ${JUDGE_DECISIONS.join(', ')}.
 Allowed risk values: ${JUDGE_RISKS.join(', ')}.
 Allowed authorization values: ${JUDGE_AUTHORIZATIONS.join(', ')}.
+Allowed reason_code values: ${JUDGE_REASON_CODES.join(', ')}.
+decision=allow requires reason_code=safe_and_authorized. decision=review or decision=deny forbids reason_code=safe_and_authorized.
 policy_version must equal ${POLICY_VERSION}. action_hash must exactly copy the supplied lowercase hash. confidence must be a JSON number from 0 through 1, never a boolean or string. rationale must not contain control characters.`;
 
 function isPlainObject(value) {

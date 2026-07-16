@@ -5,11 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { computeActionHash } from './action.js';
 import { MODEL_ID, PLUGIN_ID, POLICY_VERSION } from './constants.js';
+import { JUDGE_REASON_CODES } from './judge-schema.js';
 
 const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const DECISIONS = new Set(['allow', 'deny', 'review']);
 const RISKS = new Set(['low', 'medium', 'high', 'critical']);
 const AUTHORIZATIONS = new Set(['unknown', 'low', 'medium', 'high']);
+const REASON_CODES = new Set(JUDGE_REASON_CODES);
 const OUTCOMES = new Set(['allow', 'deny', 'review', 'failure']);
 const MODES = new Set(['autonomous', 'supervised']);
 const ENFORCEMENTS = new Set(['shadow', 'enforce']);
@@ -56,6 +58,7 @@ function emptyAuditEvent() {
     risk: null,
     authorization: null,
     confidence: null,
+    reason_code: null,
     outcome: 'failure',
     latency_ms: null,
     mode: null,
@@ -158,6 +161,7 @@ export function buildAuditEvent(input = {}) {
       AUTHORIZATIONS,
     );
     event.confidence = validConfidence(ownDataValue(judgeResult, 'confidence'));
+    event.reason_code = validEnum(ownDataValue(judgeResult, 'reason_code'), REASON_CODES);
     event.outcome = validEnum(ownDataValue(normalized, 'kind'), OUTCOMES) ?? 'failure';
     event.latency_ms = validLatency(ownDataValue(input, 'latencyMs'));
     event.mode = validEnum(ownDataValue(input, 'mode'), MODES);
@@ -190,6 +194,7 @@ function sanitizeAuditEvent(input) {
     AUTHORIZATIONS,
   );
   event.confidence = validConfidence(ownDataValue(input, 'confidence'));
+  event.reason_code = validEnum(ownDataValue(input, 'reason_code'), REASON_CODES);
   event.outcome = validEnum(ownDataValue(input, 'outcome'), OUTCOMES) ?? 'failure';
   event.latency_ms = validLatency(ownDataValue(input, 'latency_ms'));
   event.mode = validEnum(ownDataValue(input, 'mode'), MODES);

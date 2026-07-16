@@ -83,6 +83,7 @@ function fixtureFetch() {
               risk: 'critical',
               authorization: 'unknown',
               confidence: 0.75,
+              reason_code: 'other_policy_risk',
               rationale: 'Synthetic validator fixture.',
             }),
           },

@@ -27,6 +27,7 @@ const AUDIT_KEYS = [
   'risk',
   'authorization',
   'confidence',
+  'reason_code',
   'outcome',
   'latency_ms',
   'mode',
@@ -52,18 +53,23 @@ function makeAction(overrides = {}) {
 }
 
 function makeJudgeResult(overrides = {}) {
+  const verdict = {
+    policy_version: POLICY_VERSION,
+    action_hash: `sha256:${'f'.repeat(64)}`,
+    decision: 'allow',
+    risk: 'low',
+    authorization: 'high',
+    confidence: 0.91,
+    reason_code: 'safe_and_authorized',
+    rationale: `model copied ${SECRET} from the trusted request`,
+    ...overrides,
+  };
+  if (!Object.hasOwn(overrides, 'reason_code') && verdict.decision !== 'allow') {
+    verdict.reason_code = 'other_policy_risk';
+  }
   return {
     ok: true,
-    verdict: {
-      policy_version: POLICY_VERSION,
-      action_hash: `sha256:${'f'.repeat(64)}`,
-      decision: 'allow',
-      risk: 'low',
-      authorization: 'high',
-      confidence: 0.91,
-      rationale: `model copied ${SECRET} from the trusted request`,
-      ...overrides,
-    },
+    verdict,
   };
 }
 
@@ -156,6 +162,7 @@ test('writes one secret-safe whitelisted JSONL event to real tempfs with mode 06
   assert.equal(parsed.risk, 'low');
   assert.equal(parsed.authorization, 'high');
   assert.equal(parsed.confidence, 0.91);
+  assert.equal(parsed.reason_code, 'safe_and_authorized');
   assert.equal(parsed.outcome, 'allow');
   assert.equal(parsed.latency_ms, 17.25);
   assert.equal(parsed.mode, 'supervised');
@@ -308,6 +315,7 @@ test('buildAuditEvent validates every variable field and emits a bounded failure
       risk: 'catastrophic',
       authorization: true,
       confidence: Number.NaN,
+      reason_code: SECRET,
       rationale: null,
     },
     normalized: { kind: 'unexpected', reason: SECRET },
@@ -329,12 +337,38 @@ test('buildAuditEvent validates every variable field and emits a bounded failure
   assert.equal(event.risk, null);
   assert.equal(event.authorization, null);
   assert.equal(event.confidence, null);
+  assert.equal(event.reason_code, null);
   assert.equal(event.outcome, 'failure');
   assert.equal(event.latency_ms, null);
   assert.equal(event.mode, null);
   assert.equal(event.enforcement, null);
   assert.equal(event.rationale, null);
   assert.equal(JSON.stringify(event).includes(SECRET), false);
+});
+
+test('audit whitelists only a valid reason_code and never leaks model-controlled sentinels', () => {
+  const valid = buildAuditEvent({
+    action: makeAction(),
+    judgeResult: makeJudgeResult({ reason_code: 'authorization_missing' }),
+    normalized: { kind: 'review' },
+    latencyMs: 1,
+    mode: 'supervised',
+    enforcement: 'enforce',
+  });
+  assert.equal(valid.reason_code, 'authorization_missing');
+
+  const invalid = buildAuditEvent({
+    action: makeAction(),
+    judgeResult: makeJudgeResult({ reason_code: SECRET, rationale: SECRET }),
+    normalized: { kind: 'failure', reason: SECRET },
+    latencyMs: 1,
+    mode: 'autonomous',
+    enforcement: 'enforce',
+    prompt: SECRET,
+    params: { token: SECRET },
+  });
+  assert.equal(invalid.reason_code, null);
+  assert.equal(JSON.stringify(invalid).includes(SECRET), false);
 });
 
 test('buildAuditEvent never evaluates hostile getters or leaks build failures', () => {

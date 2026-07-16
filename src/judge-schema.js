@@ -6,6 +6,8 @@ const CONTRACT_UNAVAILABLE_ERROR = 'judge verdict contract unavailable';
 const schemaUrl = new URL('../schemas/judge-verdict.schema.json', import.meta.url);
 const require = createRequire(import.meta.url);
 const EMPTY_VOCABULARY = Object.freeze([]);
+const ALLOW_DECISION = 'allow';
+const SAFE_REASON_CODE = 'safe_and_authorized';
 
 function deepFreeze(value) {
   if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value;
@@ -37,12 +39,20 @@ function deriveVocabulary(schema) {
   if (typeof policyVersion !== 'string' || policyVersion === '') {
     throw new TypeError(CONTRACT_UNAVAILABLE_ERROR);
   }
+  const decisions = frozenStrings(properties.decision.enum);
+  const risks = frozenStrings(properties.risk.enum);
+  const authorizations = frozenStrings(properties.authorization.enum);
+  const reasonCodes = frozenStrings(properties.reason_code.enum);
+  if (!decisions.includes(ALLOW_DECISION) || !reasonCodes.includes(SAFE_REASON_CODE)) {
+    throw new TypeError(CONTRACT_UNAVAILABLE_ERROR);
+  }
   return Object.freeze({
     policyVersion,
     verdictKeys,
-    decisions: frozenStrings(properties.decision.enum),
-    risks: frozenStrings(properties.risk.enum),
-    authorizations: frozenStrings(properties.authorization.enum),
+    decisions,
+    risks,
+    authorizations,
+    reasonCodes,
   });
 }
 
@@ -57,6 +67,7 @@ function unavailableContract() {
     decisions: EMPTY_VOCABULARY,
     risks: EMPTY_VOCABULARY,
     authorizations: EMPTY_VOCABULARY,
+    reasonCodes: EMPTY_VOCABULARY,
     validateJudgeVerdict: unavailable,
     createJudgeResponseFormat: unavailable,
   });
@@ -99,7 +110,13 @@ export function createJudgeSchemaContract(dependencies = {}) {
       ...vocabulary,
       validateJudgeVerdict(value) {
         try {
-          if (validate(value)) return;
+          if (validate(value)) {
+            const decision = value.decision;
+            const reasonCode = value.reason_code;
+            const isAllow = decision === ALLOW_DECISION;
+            const isSafeReason = reasonCode === SAFE_REASON_CODE;
+            if (isAllow === isSafeReason) return;
+          }
         } catch {
           // Normalize traps from hostile values just like ordinary schema failures.
         }
@@ -129,6 +146,7 @@ export const JUDGE_VERDICT_KEYS = defaultContract.verdictKeys;
 export const JUDGE_DECISIONS = defaultContract.decisions;
 export const JUDGE_RISKS = defaultContract.risks;
 export const JUDGE_AUTHORIZATIONS = defaultContract.authorizations;
+export const JUDGE_REASON_CODES = defaultContract.reasonCodes;
 
 export function validateJudgeVerdict(value) {
   return defaultContract.validateJudgeVerdict(value);

@@ -179,7 +179,21 @@ test('release builder publishes one versioned tarball and matching sha256 into a
   ]);
   assert.equal(packagedSchema, sourceSchema);
   const parsedSchema = JSON.parse(packagedSchema);
-  assert.equal(parsedSchema.properties.policy_version.const, '2026-07-15.1');
+  assert.equal(parsedSchema.properties.policy_version.const, '2026-07-16.1');
+  assert.equal(parsedSchema.required.length, 8);
+  assert.deepEqual(parsedSchema.properties.reason_code.enum, [
+    'safe_and_authorized',
+    'authorization_missing',
+    'out_of_scope',
+    'destructive_or_irreversible',
+    'sensitive_data',
+    'external_side_effect',
+    'privilege_or_security_boundary',
+    'untrusted_instruction',
+    'self_modification',
+    'opaque_or_unverifiable',
+    'other_policy_risk',
+  ]);
   assert.equal(parsedSchema.additionalProperties, false);
   for (const file of EXPECTED_PACKAGE_FILES) {
     const content = await fs.readFile(path.join(extracted, 'package', file), 'utf8');
@@ -214,7 +228,7 @@ test('manifest keeps model and policy immutable outside public config', async ()
   );
   assert.deepEqual(Object.keys(manifest.configSchema.properties).sort(), ['enforcement', 'mode']);
   assert.equal(JSON.stringify(manifest).includes('Qwen/Qwen3.5-397B-A17B'), false);
-  assert.equal(JSON.stringify(manifest).includes('2026-07-15.1'), false);
+  assert.equal(JSON.stringify(manifest).includes('2026-07-16.1'), false);
 });
 
 test('runtime smoke pins v0.4 and fails closed for schema-invalid judge output', async (t) => {
