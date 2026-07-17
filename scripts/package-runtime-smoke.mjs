@@ -17,10 +17,10 @@ if (!packageRoot || !stateDir) {
   const packageMetadata = JSON.parse(
     await fs.readFile(path.resolve(packageRoot, 'package.json'), 'utf8'),
   );
-  assert.equal(packageMetadata.version, '0.4.1');
+  assert.equal(packageMetadata.version, '0.5.0');
   assert.equal(POLICY_VERSION, '2026-07-16.1');
   const auditPath = path.join(stateDir, 'logs', 'integration.jsonl');
-  const fixtureKey = 'runtime-smoke-key-v041';
+  const fixtureKey = 'runtime-smoke-key-v050';
   const forbiddenModelOverride = 'forbidden-override';
   const rawPrompt = 'runtime smoke trusted prompt';
 

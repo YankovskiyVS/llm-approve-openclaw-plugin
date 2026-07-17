@@ -1,5 +1,9 @@
 # Sealed holdout protocol
 
+Статус `0.5.0`: новый unseen holdout не выполнялся. Исторические результаты в
+этом документе не являются qualification новой routing/feedback реализации;
+они сохранены только как методология и provenance предыдущих прогонов.
+
 Этот протокол проверяет fixed judge на новых cases, не показывая
 inference principal эталонные labels. Команды доступны только в source
 checkout; runtime `.tgz` плагина eval-код не содержит.

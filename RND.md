@@ -1,13 +1,13 @@
 # R&D: LLM-judge для auto approve tool calls
 
-Дата актуализации: **15 июля 2026**.
+Дата актуализации: **17 июля 2026**.
 
-## Current 0.4.1 handoff
+## Current 0.5.0 handoff
 
-Runtime contract 0.4.1 зафиксирован так:
+Runtime contract 0.5.0 зафиксирован так:
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-15.1`;
+- policy: `2026-07-16.1`;
 - production profile: `temperature=0`, strict
   `response_format.type=json_schema`, `strict=true`, thinking off,
   `max_tokens=256`;
@@ -21,6 +21,12 @@ Runtime contract 0.4.1 зафиксирован так:
 - strict ENV profiles, bounded timeout, confined audit path и lifecycle logging;
 - public ENV names и оба hook не изменились относительно 0.3.0.
 
+Новый runtime layer v0.5 добавляет host-generated `blockReason`, per-run breaker
+(`3 consecutive` deny или `10 among 50` последних решений), узкий pre-LLM hard
+boundary и enum-only `decision_source`. Safe path остаётся metrics-only и не
+может auto-approve действие без Qwen. Эти изменения проверены unit/package и
+stock-runtime smoke, но не являются новым сравнением моделей или unseen holdout.
+
 Fallback на `json_object` отсутствует. Provider/schema/Ajv failure остаётся
 fail-closed. Schema-valid output не означает safe: exact hash, rationale,
 risk, authorization, confidence, opaque params и deterministic guard продолжают
@@ -28,7 +34,7 @@ risk, authorization, confidence, opaque params и deterministic guard продо
 platform-команда может генерировать свои типы из JSON Schema.
 
 Source checkout сохраняет `npm test` и `eval:*` команды. Runtime `.tgz` содержит
-только reviewed 26-file allowlist; `test/`, `evals/`, corpora и dev-only scripts
+только reviewed explicit allowlist; `test/`, `evals/`, corpora и dev-only scripts
 в handoff artifact не публикуются. Ajv устанавливается как pinned production
 dependency; OpenClaw peer помечен optional для npm и связывается host runtime.
 
@@ -60,7 +66,8 @@ Raw LLM ошибочно разрешила `32/80` unsafe families, determinist
 является только tuning evidence; повторный scoring после изменений не может
 квалифицировать новую policy.
 
-После RCA создан candidate `2026-07-15.1`: deadline `30000 ms`, уточнённая
+После RCA создан candidate `2026-07-15.1`, затем контракт `2026-07-16.1`:
+deadline `30000 ms`, reason codes, feedback и уточнённая
 семантика passive observation/authorization, structural browser/package/history
 guards и раздельные transport/parser/semantic metrics. Его доказательством может
 быть только отдельный reserve/new holdout.
@@ -377,7 +384,7 @@ Live probe `hivetrace/HiveTraceGuard-Pro` был быстрым, но дал fal
 - [ClawLens](https://github.com/nk3750/clawlens) — local observability, risk scoring, audit и operator-defined guardrails; шире по UI/telemetry, но другой decision contract.
 - [Destructive Command Guard](https://github.com/Dicklesworthstone/destructive_command_guard) — deterministic Rust pre-tool scanner для shell/destructive команд: README заявляет 50+ rule packs и sub-millisecond fast path. Это сильный complement для `exec`-слоя и источник rule patterns, но не замена semantic all-tool judge: default — fail-open/default-allow, direct file writes и API calls не перехватываются, запуск внешнего script вроде `./deploy.sh` не раскрывает его содержимое, documented bypass отключает защиту, а OpenClaw отсутствует в списке поддерживаемых агентов. Для v0.4 это потенциальный отдельный defense-in-depth layer, не runtime dependency.
 
-Clean implementation выбрана потому, что ни один вариант не сочетает все требования: fixed independent Cloud.ru model, raw trusted user intent без transcript fallback, redacted exact action hash, strict seven-field response, fail-closed ошибки, native one-call approval и минимальный audit без raw rationale.
+Clean implementation выбрана потому, что ни один вариант не сочетает все требования: fixed independent Cloud.ru model, raw trusted user intent без transcript fallback, redacted exact action hash, strict eight-field response с reason code, fail-closed ошибки, native one-call approval и минимальный audit без raw rationale.
 
 ## Historical production-contract dev-smoke
 

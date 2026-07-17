@@ -1,6 +1,6 @@
 # OpenClaw LLM Action Judge
 
-Плагин `openclaw-llm-action-judge` версии `0.4.1` проверяет каждый proposed tool
+Плагин `openclaw-llm-action-judge` версии `0.5.0` проверяет каждый proposed tool
 call отдельной фиксированной LLM **до исполнения**. Низкорисковое и явно
 разрешённое действие может пройти автоматически, сомнительное — запросить
 подтверждение, опасное — быть заблокировано.
@@ -27,9 +27,11 @@ call отдельной фиксированной LLM **до исполнени
 | **OpenClaw hooks** | `before_model_resolve` сохраняет текущий trusted user request, `before_tool_call` перехватывает proposed action. Оба hook устанавливаются самим плагином. |
 | **LLM judge** | Фиксированная `Qwen/Qwen3.5-397B-A17B` независимо оценивает `decision`, `risk`, `authorization` и `confidence`. |
 | **Structured Output** | Cloud.ru ограничивает ответ strict `json_schema`; тот же контракт повторно проверяется локально через Ajv. |
-| **Deterministic guard** | Может только понизить ошибочный model `allow`. Он защищает credentials, sensitive OpenClaw state и записи в instructions, production/CI/security config, package и Git boundaries, exposed history, structured `exec`/`bash`, распознанные consequential browser/first-party actions и external sends. |
+| **Hard routing** / **Deterministic guard** | Точные self-modification, credential exfiltration и попытки отключить judge блокируются до LLM. Остальные действия проверяет Qwen, после чего guard может только ужесточить ошибочный `allow`. |
+| **Circuit breaker** | Для каждого `runId` необратимо срабатывает после `3 consecutive` deny или `10 among 50` последних решений и останавливает зацикленную серию действий. |
 | **Mode mapper** | Преобразует итог judge в execute, native approval или block согласно `shadow`, `supervised` или `autonomous`. |
-| **Audit** | Пишет решение, latency и hashes в JSONL без raw prompt, params, rationale и credentials. |
+| **Worker feedback** | При deny/failure возвращает фиксированный безопасный `blockReason`, чтобы агент понял причину отказа и мог предложить более безопасный шаг. |
+| **Audit** | Пишет решение, `decision_source`, safe-path disagreement, latency и hashes в JSONL без raw prompt, params, rationale и credentials. Safe path в v0.5 — metrics-only сигнал и сам ничего не разрешает. |
 
 ## Что guard никогда не auto-approve
 
@@ -77,11 +79,11 @@ OpenClaw и на host без native sandbox может означать gateway 
 
 ## Установка
 
-Команды выполняются из каталога `releases/v0.4.1`:
+Команды выполняются из каталога `releases/v0.5.0`:
 
 ```bash
-shasum -a 256 -c openclaw-llm-action-judge-0.4.1.tgz.sha256
-openclaw plugins install ./openclaw-llm-action-judge-0.4.1.tgz
+shasum -a 256 -c openclaw-llm-action-judge-0.5.0.tgz.sha256
+openclaw plugins install ./openclaw-llm-action-judge-0.5.0.tgz
 ```
 
 Проверьте текущий allowlist:
@@ -215,7 +217,7 @@ openclaw plugins doctor
 
 - gateway отвечает `OK`;
 - запись `plugin.id=llm-action-judge` имеет `plugin.imported=true` и
-  `plugin.version=0.4.1`;
+  `plugin.version=0.5.0`;
 - её runtime `typedHooks` содержит ровно
   `{"name":"before_model_resolve","priority":-1000}` и
   `{"name":"before_tool_call","priority":-1000}`;
@@ -255,6 +257,10 @@ tail -f "${OPENCLAW_JUDGE_AUDIT_PATH:-${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/log
 - `decision` — raw решение LLM;
 - `risk` и `authorization` — оценка риска и наличия разрешения;
 - `outcome` — итог после schema validation, confidence threshold и local guard;
+- `decision_source` — `hard_boundary`, `circuit_breaker`, `llm`,
+  `local_downgrade` или `failure`;
+- `safe_path_candidate`/`safe_path_disagreement` — metrics-only телеметрия,
+  не отдельное разрешение;
 - `mode`/`enforcement` — активный режим;
 - `latency_ms` — время ответа judge.
 
@@ -269,7 +275,8 @@ guard не позволил выполнить его автоматически
    HMAC-SHA-256 commitment.
 3. В Cloud.ru уходят user request, tool name, redacted params, fixed policy и
    action hash.
-4. Judge возвращает seven-field verdict через strict `json_schema`.
+4. Judge возвращает eight-field verdict, включая фиксированный `reason_code`,
+   через strict `json_schema`.
 5. Плагин повторно валидирует verdict локально через Ajv, проверяет hash,
    `risk=low`, `authorization=high` и confidence `>=0.8`.
 6. Opaque-data и deterministic guards могут только ужесточить решение.
@@ -285,10 +292,10 @@ process и меняется после restart, поэтому audit hashes не
 Schema-valid ответ не означает safe решение: semantic checks и deterministic
 guard остаются обязательными. Fallback на `json_object` отсутствует.
 
-## Зафиксированный контракт 0.4.1
+## Зафиксированный контракт 0.5.0
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-15.1`;
+- policy: `2026-07-16.1`;
 - minimum allow confidence: `0.8`;
 - default timeout: `30000 ms`;
 - endpoint: только `https://foundation-models.api.cloud.ru/v1`;
@@ -303,8 +310,10 @@ Primary pilot на предыдущей policy `2026-07-14.6` и deadline `8000 
 launch gate: `15/40` MUST_ALLOW families прошли, `19/80` MUST_BLOCK families
 остались unsafe после combined guard, а `80/360` calls завершились timeout.
 Он зафиксирован как tuning evidence и не может подтверждать новую policy.
-`2026-07-15.1` должна пройти отдельный reserve/new holdout перед autonomous
-release. Полная методология и ограничения находятся в [RND.md](RND.md).
+`0.5.0` подтверждена source/package/stock-runtime тестами, но не новым unseen
+model holdout. Поэтому autonomous включайте постепенно и не используйте плагин
+как единственную security boundary. Полная методология и ограничения находятся
+в [RND.md](RND.md).
 
 ## Troubleshooting
 

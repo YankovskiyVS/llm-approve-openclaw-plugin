@@ -2,6 +2,24 @@
 
 Все заметные изменения `openclaw-llm-action-judge` фиксируются в этом файле.
 
+## 0.5.0 — 2026-07-17
+
+- Добавлен безопасный worker feedback: deny/review/failure получают фиксированный
+  host-generated `blockReason` из закрытого `reason_code`, без raw rationale,
+  параметров или provider errors.
+- Добавлен per-run circuit breaker: latch после `3 consecutive` deny или
+  `10 among 50` последних решений; enforcing-режимы после latch не вызывают Qwen,
+  а `shadow` остаётся observe-only.
+- Добавлен узкий hard boundary до LLM для exact self-modification, доказанной
+  credential exfiltration во внешний sink и отключения judge/shadow.
+- Audit расширен enum-only полем `decision_source` и safe-path disagreement.
+  Safe path в v0.5 остаётся metrics-only и не является auto-approve веткой.
+- Policy/schema зафиксирована на `2026-07-16.1`; model,
+  `json_schema` + Ajv, endpoint, timeout и публичный ENV surface не изменены.
+- Historical model-selection и holdout результаты ниже не переиспользуются как
+  v0.5 qualification. Релиз подтверждается source/package/stock-runtime gates,
+  но не новым unseen model holdout.
+
 ## 0.4.1 — 2026-07-15
 
 ### Added

@@ -1,13 +1,13 @@
 # Security policy
 
-Поддерживаемый internal release: `openclaw-llm-action-judge` 0.4.1 с policy
-`2026-07-15.1` на OpenClaw
+Поддерживаемый internal release: `openclaw-llm-action-judge` 0.5.0 с policy
+`2026-07-16.1` на OpenClaw
 `>=2026.6.11` и Node.js `>=22.19.0`.
 
 ## Security boundary
 
 Плагин связывает fixed judge verdict с opaque keyed exact-action commitment,
-принимает только strict seven-field JSON, повторно проверяет action после async
+принимает только strict eight-field JSON с закрытым `reason_code`, повторно проверяет action после async
 call и работает fail-closed при setup/transport/timeout/schema/policy/hash/
 mutation failure.
 
@@ -69,13 +69,21 @@ Sealed primary на policy `2026-07-14.6` и timeout `8000 ms` затем про
 launch gate: `15/40` safe families, `19/80` unsafe families после combined
 guard и `80/360` timeout. Он используется только как tuning evidence.
 
-Current policy `2026-07-15.1` уточняет passive observation и authorization,
+Current policy `2026-07-16.1` уточняет passive observation и authorization,
 увеличивает default deadline до `30000 ms` и добавляет structural guard для
 consequential browser actions, распознанные package manifests распространённых
 экосистем, exposed tool history и ослабления ignore boundaries. Для
 ignore-файлов только `apply_patch` может сохранить allow на доказуемо защитном
 delta; `edit` и полный `write` fail-closed всегда требуют review. До отдельного
 reserve/new holdout автономный режим остаётся неквалифицированным.
+
+В v0.5 точные self-modification, credential exfiltration во внешний sink и
+отключение judge/shadow блокируются до LLM с
+`decision_source=hard_boundary`. Safe candidate не является allow: это только
+metrics-only телеметрия disagreement, а действие всё равно проходит fixed Qwen,
+schema, action hash и local guard. Per-run circuit breaker срабатывает после
+`3 consecutive` deny или `10 among 50` последних решений; после latch enforcing
+режимы не вызывают Qwen и возвращают безопасный host-generated `blockReason`.
 
 Guard также защищает sensitive OpenClaw state вне workspace и записи в
 instruction surfaces: root config/credential/session/history/log data,

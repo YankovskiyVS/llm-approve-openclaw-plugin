@@ -17,10 +17,10 @@
 
 ## 1. Verify artifact
 
-Из каталога `releases/v0.4.1`:
+Из каталога `releases/v0.5.0`:
 
 ```bash
-shasum -a 256 -c openclaw-llm-action-judge-0.4.1.tgz.sha256
+shasum -a 256 -c openclaw-llm-action-judge-0.5.0.tgz.sha256
 ```
 
 Ожидается `OK`. Не устанавливайте artifact с несовпавшим checksum.
@@ -71,7 +71,7 @@ platform config management. Не заменяйте рабочий список 
 следующая команда:
 
 ```bash
-openclaw plugins install ./openclaw-llm-action-judge-0.4.1.tgz
+openclaw plugins install ./openclaw-llm-action-judge-0.5.0.tgz
 openclaw config set plugins.allow '["llm-action-judge"]' --strict-json
 openclaw config set plugins.entries.llm-action-judge.hooks.allowConversationAccess true --strict-json
 openclaw plugins registry --refresh
@@ -96,7 +96,7 @@ openclaw plugins doctor
 Runtime inspect обязан показать:
 
 - запись `plugin.id=llm-action-judge` имеет `plugin.imported=true` и
-  `plugin.version=0.4.1`;
+  `plugin.version=0.5.0`;
 - её runtime `typedHooks` содержит ровно
   `{"name":"before_model_resolve","priority":-1000}` и
   `{"name":"before_tool_call","priority":-1000}`;
@@ -134,8 +134,8 @@ failure metrics несопоставимыми с deployment.
 ## Update
 
 ```bash
-shasum -a 256 -c openclaw-llm-action-judge-0.4.1.tgz.sha256
-openclaw plugins install ./openclaw-llm-action-judge-0.4.1.tgz --force
+shasum -a 256 -c openclaw-llm-action-judge-0.5.0.tgz.sha256
+openclaw plugins install ./openclaw-llm-action-judge-0.5.0.tgz --force
 openclaw plugins registry --refresh
 openclaw config validate
 openclaw gateway restart
@@ -147,17 +147,33 @@ openclaw plugins inspect --all --runtime --json
 посмотрите точный список и удалите только старый judge path. Не удаляйте пути
 других plugins.
 
-## Rollback 0.4.1 → 0.4.0
+## Rollback 0.5.0 → 0.4.1
 
-Пока работает 0.4.1, сначала задайте `OPENCLAW_JUDGE_PROFILE=shadow` в durable
+Пока работает 0.5.0, сначала задайте `OPENCLAW_JUDGE_PROFILE=shadow` в durable
 environment service manager/platform, выполните rollout/restart и проверьте
 health. Shell-local значение для managed service недостаточно.
 
-Затем установите предыдущий проверенный artifact 0.4.0. Он сохраняет public
-ENV/profile, hooks, fixed model и strict Structured Output transport, но
-откатывает policy с `2026-07-15.1` до `2026-07-14.6` и default judge deadline с
-`30000 ms` до `8000 ms`. В нём также нет process-local HMAC action commitment и
-sealed holdout tooling 0.4.1:
+Затем установите предыдущий проверенный artifact 0.4.1. Он сохраняет public
+ENV/profile, hooks, fixed model и strict Structured Output transport, но не
+содержит v0.5 worker feedback, circuit breaker и hard routing:
+
+```bash
+shasum -a 256 -c openclaw-llm-action-judge-0.4.1.tgz.sha256
+openclaw plugins install ./openclaw-llm-action-judge-0.4.1.tgz --force
+openclaw plugins registry --refresh
+openclaw config validate
+openclaw gateway restart
+openclaw gateway health
+openclaw plugins inspect --all --runtime --json
+```
+
+Проверьте runtime version `0.4.1`, два hook и `diagnostics=[]`.
+
+### Further rollback 0.4.1 → 0.4.0
+
+Artifact 0.4.0 откатывает policy с `2026-07-15.1` до `2026-07-14.6` и default
+judge deadline с `30000 ms` до `8000 ms`. В нём также нет process-local HMAC
+action commitment и sealed holdout tooling 0.4.1:
 
 ```bash
 shasum -a 256 -c openclaw-llm-action-judge-0.4.0.tgz.sha256

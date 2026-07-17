@@ -1,6 +1,6 @@
 # Integration contract
 
-Этот документ — black-box контракт `openclaw-llm-action-judge` 0.4.1 для
+Этот документ — black-box контракт `openclaw-llm-action-judge` 0.5.0 для
 команды, которая встраивает плагин в OpenClaw.
 
 ## Что делает пакет
@@ -77,9 +77,9 @@ correlation или внешнего пересчёта.
 Deployment не может менять:
 
 - model: `Qwen/Qwen3.5-397B-A17B`;
-- policy: `2026-07-15.1`;
+- policy: `2026-07-16.1`;
 - minimum confidence: `0.8`;
-- system prompt и strict seven-field response schema;
+- system prompt и strict eight-field response schema с `reason_code`;
 - exact-action binding, redaction, opaque downgrade и deterministic local guard;
 - approval timeout `60000 ms` с `timeoutBehavior=deny`.
 
@@ -103,9 +103,20 @@ JSON Schema является integration artifact для других языко
 может сгенерировать из неё Pydantic model, но Python/Pydantic runtime и sidecar
 не являются частью плагина или его deployment contract.
 
-## Deterministic guard boundary
+## Hard routing, breaker и deterministic guard
 
-Policy `2026-07-15.1` формально разделяет passive observation и external
+До обращения к Qwen точные попытки self-modification плагина, доказанная
+передача найденного секрета во внешний sink и отключение judge/shadow блокируются
+с `decision_source=hard_boundary`. Это узкий fail-closed boundary, а не общий
+substring blacklist. Safe path в v0.5 остаётся metrics-only: даже
+`session_status` текущей сессии и bounded browser wait вызывают Qwen и никогда
+сам по себе не устанавливает authorization.
+
+Per-run circuit breaker необратимо срабатывает после `3 consecutive` deny либо
+`10 among 50` последних решений. В enforcing-режимах последующие вызовы получают
+фиксированный `blockReason` и не вызывают Qwen; `shadow` остаётся observe-only.
+
+Policy `2026-07-16.1` формально разделяет passive observation и external
 mutation, задаёт уровни authorization и не позволяет action params доказывать
 разрешение. Local guard является downgrade-only: он не может превратить
 `review`, `deny` или failure в `allow`.
@@ -128,8 +139,8 @@ mutation, задаёт уровни authorization и не позволяет act
 агента.
 
 Primary pilot на предыдущем runtime-контракте провалил launch gate и используется
-только для tuning. Для `2026-07-15.1` qualification evidence ещё должна быть
-получена отдельным reserve/new holdout прогоном.
+только для tuning. Для `2026-07-16.1` нового unseen model holdout нет; v0.5.0
+является package/runtime-qualified, а не новым model-quality benchmark result.
 
 Shell parser — backstop, а не shell sandbox: simple unknown direct commands
 по-прежнему зависят от LLM verdict и native OpenClaw controls. Отсутствующий
@@ -162,9 +173,12 @@ release blocker; TOCTOU-проверка внутри callback judge не пок
 | Outcome | Shadow | Supervised | Autonomous |
 |---|---|---|---|
 | validated allow | `undefined` | `{ params }` | `{ params }` |
-| review | `undefined` | `{ params, requireApproval }` | `{ block: true }` |
-| deny | `undefined` | `{ block: true }` | `{ block: true }` |
-| setup/transport/schema/hash failure | `undefined` только у валидного shadow | `requireApproval` | `{ block: true }` |
+| review | `undefined` | `{ params, requireApproval }` | `{ block: true, blockReason }` |
+| deny | `undefined` | `{ block: true, blockReason }` | `{ block: true, blockReason }` |
+| setup/transport/schema/hash failure | `undefined` только у валидного shadow | `requireApproval` | `{ block: true, blockReason }` |
+
+`blockReason` строится host-side из закрытого enum `feedback_code`; raw model
+rationale, параметры и provider errors в worker feedback не попадают.
 
 Invalid startup configuration всегда переводит plugin в permanent
 `supervised + enforce` с failing client: каждое действие требует native approval,
@@ -185,6 +199,8 @@ Append-only JSONL содержит только:
 - tool name и opaque exact-action commitment;
 - хешированные agent/session/run/tool-call IDs;
 - decision, risk, authorization, confidence, outcome и latency;
+- `decision_source` (`hard_boundary`, `circuit_breaker`, `llm`,
+  `local_downgrade`, `failure`) и metrics-only safe-path поля;
 - effective mode/enforcement;
 - marker наличия rationale без самого текста.
 
