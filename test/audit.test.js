@@ -32,6 +32,10 @@ const AUDIT_KEYS = [
   'latency_ms',
   'mode',
   'enforcement',
+  'decision_source',
+  'safe_path_candidate',
+  'safe_path_family',
+  'safe_path_disagreement',
   'feedback_code',
   'feedback_status',
   'rationale',
@@ -54,10 +58,10 @@ function makeAction(overrides = {}) {
   };
 }
 
-function makeJudgeResult(overrides = {}) {
+function makeJudgeResult(overrides = {}, action = makeAction()) {
   const verdict = {
     policy_version: POLICY_VERSION,
-    action_hash: `sha256:${'f'.repeat(64)}`,
+    action_hash: computeActionHash(action),
     decision: 'allow',
     risk: 'low',
     authorization: 'high',
@@ -107,12 +111,26 @@ async function tempAudit(t) {
 function safeAuditEvent() {
   return buildAuditEvent({
     action: makeAction(),
-    judgeResult: makeJudgeResult({ rationale: null }),
+    judgeResult: makeJudgeResult(),
     normalized: { kind: 'allow' },
     latencyMs: 1,
     mode: 'supervised',
     enforcement: 'enforce',
   });
+}
+
+function assertAuditSemanticFailure(event) {
+  assert.equal(event.decision_source, 'failure');
+  assert.equal(event.outcome, 'failure');
+  assert.equal(event.decision, null);
+  assert.equal(event.risk, null);
+  assert.equal(event.authorization, null);
+  assert.equal(event.confidence, null);
+  assert.equal(event.reason_code, null);
+  assert.equal(event.safe_path_candidate, false);
+  assert.equal(event.safe_path_family, null);
+  assert.equal(event.safe_path_disagreement, null);
+  assert.equal(event.rationale, null);
 }
 
 test('writes one secret-safe whitelisted JSONL event to real tempfs with mode 0600', async (t) => {
@@ -149,7 +167,7 @@ test('writes one secret-safe whitelisted JSONL event to real tempfs with mode 06
   assert.equal(parsed.policy_version, POLICY_VERSION);
   assert.equal(parsed.tool_name, action.tool_name);
   assert.equal(parsed.action_hash, computeActionHash(action));
-  assert.notEqual(parsed.action_hash, makeJudgeResult().verdict.action_hash);
+  assert.equal(parsed.action_hash, makeJudgeResult({}, action).verdict.action_hash);
   assert.equal(parsed.agent_id_hash, expectedIdHash('agent_id', action.agent_id));
   assert.equal(parsed.session_key_hash, expectedIdHash('session_key', action.session_key));
   assert.equal(parsed.run_id_hash, expectedIdHash('run_id', action.run_id));
@@ -169,12 +187,253 @@ test('writes one secret-safe whitelisted JSONL event to real tempfs with mode 06
   assert.equal(parsed.latency_ms, 17.25);
   assert.equal(parsed.mode, 'supervised');
   assert.equal(parsed.enforcement, 'enforce');
+  assert.equal(parsed.decision_source, 'llm');
+  assert.equal(parsed.safe_path_candidate, false);
+  assert.equal(parsed.safe_path_family, null);
+  assert.equal(parsed.safe_path_disagreement, null);
   assert.equal(parsed.feedback_code, null);
   assert.equal(parsed.feedback_status, null);
   assert.equal(parsed.rationale, OMITTED_RATIONALE);
   assert.equal(Object.hasOwn(parsed, 'prompt'), false);
   assert.equal(Object.hasOwn(parsed, 'params'), false);
   assert.equal(stats.mode & 0o777, 0o600);
+});
+
+test('audit records only the closed decision source and safe-path matrix', () => {
+  const safeAction = makeAction({ tool_name: 'session_status', params: {} });
+  const safeAllow = buildAuditEvent({
+    action: safeAction,
+    judgeResult: makeJudgeResult({}, safeAction),
+    normalized: { kind: 'allow' },
+    latencyMs: 2,
+    mode: 'autonomous',
+    enforcement: 'shadow',
+    decisionSource: 'llm',
+    safePathCandidate: true,
+    safePathFamily: 'session_status_current',
+    safePathDisagreement: false,
+  });
+  assert.equal(safeAllow.decision_source, 'llm');
+  assert.equal(safeAllow.safe_path_candidate, true);
+  assert.equal(safeAllow.safe_path_family, 'session_status_current');
+  assert.equal(safeAllow.safe_path_disagreement, false);
+
+  const hard = buildAuditEvent({
+    action: makeAction({ tool_name: 'write' }),
+    normalized: { kind: 'deny', feedback_code: 'hard_policy_block' },
+    latencyMs: 0,
+    mode: 'supervised',
+    enforcement: 'enforce',
+    decisionSource: 'hard_boundary',
+    safePathCandidate: false,
+    safePathFamily: null,
+    safePathDisagreement: null,
+  });
+  assert.equal(hard.decision_source, 'hard_boundary');
+  assert.equal(hard.outcome, 'deny');
+  assert.equal(hard.safe_path_candidate, false);
+  assert.equal(hard.safe_path_family, null);
+  assert.equal(hard.safe_path_disagreement, null);
+
+  const breaker = buildAuditEvent({
+    action: makeAction(),
+    normalized: { kind: 'deny', feedback_code: 'repeated_denials' },
+    mode: 'autonomous',
+    enforcement: 'enforce',
+    decisionSource: 'circuit_breaker',
+  });
+  assert.equal(breaker.decision_source, 'circuit_breaker');
+});
+
+test('builder accepts only the exact source, outcome, raw-judge and feedback truth matrix', () => {
+  const action = makeAction();
+  const rawAllow = makeJudgeResult({}, action);
+  const rawDeny = makeJudgeResult({
+    decision: 'deny',
+    risk: 'high',
+    authorization: 'low',
+    reason_code: 'out_of_scope',
+  }, action);
+  const rawReview = makeJudgeResult({
+    decision: 'review',
+    risk: 'medium',
+    authorization: 'medium',
+    reason_code: 'authorization_missing',
+  }, action);
+  const valid = [
+    [{
+      judgeResult: rawAllow,
+      normalized: { kind: 'allow', verdict: rawAllow.verdict },
+      decisionSource: 'llm',
+    }, ['allow', null, null]],
+    [{
+      judgeResult: rawDeny,
+      normalized: { kind: 'deny', verdict: rawDeny.verdict },
+      decisionSource: 'llm',
+    }, ['deny', 'out_of_scope', 'blocked']],
+    [{
+      judgeResult: rawReview,
+      normalized: { kind: 'review', verdict: rawReview.verdict },
+      decisionSource: 'llm',
+    }, ['review', 'authorization_missing', 'approval_required']],
+    [{
+      judgeResult: rawAllow,
+      normalized: { kind: 'review', local_guard: true, verdict: rawAllow.verdict },
+      decisionSource: 'local_downgrade',
+    }, ['review', 'local_policy_review', 'approval_required']],
+    [{
+      normalized: { kind: 'failure', feedback_code: 'judge_unavailable' },
+      decisionSource: 'failure',
+    }, ['failure', 'judge_unavailable', 'approval_required']],
+    [{
+      normalized: { kind: 'deny', feedback_code: 'hard_policy_block' },
+      decisionSource: 'hard_boundary',
+    }, ['deny', 'hard_policy_block', 'blocked']],
+    [{
+      normalized: { kind: 'deny', feedback_code: 'repeated_denials' },
+      decisionSource: 'circuit_breaker',
+    }, ['deny', 'repeated_denials', 'blocked']],
+  ];
+
+  for (const [input, expected] of valid) {
+    const event = buildAuditEvent({
+      action,
+      mode: 'supervised',
+      enforcement: 'enforce',
+      ...input,
+    });
+    assert.deepEqual(
+      [event.outcome, event.feedback_code, event.feedback_status],
+      expected,
+      JSON.stringify(input),
+    );
+    assert.equal(event.decision_source, input.decisionSource);
+  }
+
+  const contradictions = [
+    {
+      normalized: { kind: 'review', feedback_code: 'hard_policy_block' },
+      decisionSource: 'hard_boundary',
+    },
+    {
+      normalized: { kind: 'failure', feedback_code: 'repeated_denials' },
+      decisionSource: 'circuit_breaker',
+    },
+    {
+      judgeResult: rawAllow,
+      normalized: { kind: 'deny', local_guard: true, verdict: rawAllow.verdict },
+      decisionSource: 'local_downgrade',
+    },
+    {
+      judgeResult: rawReview,
+      normalized: { kind: 'review', local_guard: true, verdict: rawReview.verdict },
+      decisionSource: 'local_downgrade',
+    },
+    {
+      normalized: { kind: 'deny', feedback_code: 'judge_unavailable' },
+      decisionSource: 'failure',
+    },
+    {
+      judgeResult: rawDeny,
+      normalized: { kind: 'review', verdict: rawDeny.verdict },
+      decisionSource: 'llm',
+    },
+    {
+      normalized: { kind: 'allow' },
+      decisionSource: 'llm',
+    },
+    {
+      judgeResult: makeJudgeResult({
+        decision: 'allow',
+        reason_code: 'out_of_scope',
+      }, action),
+      normalized: { kind: 'allow' },
+      decisionSource: 'llm',
+    },
+    {
+      judgeResult: makeJudgeResult({ action_hash: `sha256:${'0'.repeat(64)}` }, action),
+      normalized: { kind: 'allow' },
+      decisionSource: 'llm',
+    },
+  ];
+
+  for (const input of contradictions) {
+    assertAuditSemanticFailure(buildAuditEvent({
+      action,
+      mode: 'supervised',
+      enforcement: 'enforce',
+      ...input,
+    }));
+  }
+});
+
+test('safe-path audit metadata obeys final-outcome disagreement with the breaker exception', () => {
+  const action = makeAction();
+  const rawAllow = makeJudgeResult({}, action);
+  const rawDeny = makeJudgeResult({
+    decision: 'deny',
+    reason_code: 'out_of_scope',
+  }, action);
+  const base = {
+    action,
+    mode: 'autonomous',
+    enforcement: 'shadow',
+    safePathCandidate: true,
+    safePathFamily: 'session_status_current',
+  };
+  const safeAllow = buildAuditEvent({
+    ...base,
+    judgeResult: rawAllow,
+    normalized: { kind: 'allow', verdict: rawAllow.verdict },
+    decisionSource: 'llm',
+    safePathDisagreement: false,
+  });
+  assert.equal(safeAllow.safe_path_candidate, true);
+
+  for (const input of [
+    { ...base, judgeResult: rawAllow, normalized: { kind: 'allow' }, decisionSource: 'llm', safePathDisagreement: true },
+    { ...base, judgeResult: rawDeny, normalized: { kind: 'deny', verdict: rawDeny.verdict }, decisionSource: 'llm', safePathDisagreement: false },
+    { ...base, normalized: { kind: 'deny', feedback_code: 'hard_policy_block' }, decisionSource: 'hard_boundary', safePathDisagreement: true },
+    { ...base, normalized: { kind: 'failure', feedback_code: 'judge_unavailable' }, decisionSource: 'failure', safePathDisagreement: false },
+    { ...base, safePathFamily: null, normalized: { kind: 'failure', feedback_code: 'judge_unavailable' }, decisionSource: 'failure', safePathDisagreement: true },
+    { ...base, safePathCandidate: false, normalized: { kind: 'failure', feedback_code: 'judge_unavailable' }, decisionSource: 'failure', safePathDisagreement: true },
+  ]) {
+    assertAuditSemanticFailure(buildAuditEvent(input));
+  }
+
+  for (const disagreement of [false, true]) {
+    const breaker = buildAuditEvent({
+      ...base,
+      normalized: { kind: 'deny', feedback_code: 'repeated_denials' },
+      decisionSource: 'circuit_breaker',
+      safePathDisagreement: disagreement,
+    });
+    assert.equal(breaker.decision_source, 'circuit_breaker');
+    assert.equal(breaker.safe_path_disagreement, disagreement);
+  }
+});
+
+test('audit rejects contradictory source and safe-path metadata without leaking inputs', async (t) => {
+  const { filePath } = await tempAudit(t);
+  const writer = createAuditWriter({ filePath });
+  const event = safeAuditEvent();
+  event.decision_source = 'hard_boundary';
+  event.safe_path_candidate = false;
+  event.safe_path_family = 'browser_wait';
+  event.safe_path_disagreement = true;
+  event.route_match = SECRET;
+  event.secret_provenance = SECRET;
+  event.params = { token: SECRET };
+
+  assert.equal(await writer.write(event), true);
+  const raw = await fs.readFile(filePath, 'utf8');
+  const parsed = JSON.parse(raw);
+  assert.equal(raw.includes(SECRET), false);
+  assert.deepEqual(Object.keys(parsed), AUDIT_KEYS);
+  assert.equal(parsed.decision_source, 'failure');
+  assert.equal(parsed.safe_path_candidate, false);
+  assert.equal(parsed.safe_path_family, null);
+  assert.equal(parsed.safe_path_disagreement, null);
 });
 
 test('corrects an existing audit file from 0644 to 0600 before appending', async (t) => {
@@ -223,7 +482,7 @@ test('rejects a final-path symlink without changing its regular-file target', as
   });
   const result = await writer.write(buildAuditEvent({
     action: makeAction(),
-    judgeResult: makeJudgeResult({ rationale: null }),
+    judgeResult: makeJudgeResult(),
     normalized: { kind: 'allow' },
     latencyMs: 1,
     mode: 'supervised',
@@ -353,10 +612,14 @@ test('buildAuditEvent validates every variable field and emits a bounded failure
 });
 
 test('audit whitelists only a valid reason_code and never leaks model-controlled sentinels', () => {
+  const judgeResult = makeJudgeResult({
+    decision: 'review',
+    reason_code: 'authorization_missing',
+  });
   const valid = buildAuditEvent({
     action: makeAction(),
-    judgeResult: makeJudgeResult({ reason_code: 'authorization_missing' }),
-    normalized: { kind: 'review' },
+    judgeResult,
+    normalized: { kind: 'review', verdict: judgeResult.verdict },
     latencyMs: 1,
     mode: 'supervised',
     enforcement: 'enforce',
@@ -435,13 +698,13 @@ test('audit records only closed feedback code and status metadata for enforced o
     }, 'local_policy_review', 'approval_required'],
     [{
       judgeResult: undefined,
-      normalized: { kind: 'review', feedback_code: 'hard_policy_block' },
+      normalized: { kind: 'deny', feedback_code: 'hard_policy_block' },
       mode: 'supervised',
       enforcement: 'enforce',
     }, 'hard_policy_block', 'blocked'],
     [{
       judgeResult: undefined,
-      normalized: { kind: 'failure', feedback_code: 'repeated_denials' },
+      normalized: { kind: 'deny', feedback_code: 'repeated_denials' },
       mode: 'supervised',
       enforcement: 'enforce',
     }, 'repeated_denials', 'blocked'],
@@ -492,7 +755,7 @@ test('audit keeps feedback metadata null for allow and shadow outcomes', () => {
   }
 });
 
-test('audit mirrors the fail-closed mapper for contradictory allow host codes', () => {
+test('audit records only host allow codes whose effective mapper outcome has an exact source', () => {
   for (const feedbackCode of [
     'hard_policy_block',
     'local_policy_review',
@@ -506,9 +769,17 @@ test('audit mirrors the fail-closed mapper for contradictory allow host codes', 
       mode: 'supervised',
       enforcement: 'enforce',
     });
-    assert.equal(event.outcome, 'deny');
-    assert.equal(event.feedback_code, feedbackCode);
-    assert.equal(event.feedback_status, 'blocked');
+    if (feedbackCode === 'hard_policy_block' || feedbackCode === 'repeated_denials') {
+      assert.equal(event.decision_source,
+        feedbackCode === 'hard_policy_block' ? 'hard_boundary' : 'circuit_breaker');
+      assert.equal(event.outcome, 'deny');
+      assert.equal(event.feedback_code, feedbackCode);
+      assert.equal(event.feedback_status, 'blocked');
+    } else {
+      assertAuditSemanticFailure(event);
+      assert.equal(event.feedback_code, 'invalid_judge_response');
+      assert.equal(event.feedback_status, 'approval_required');
+    }
   }
 });
 
@@ -575,9 +846,9 @@ test('writer re-applies the whitelist to malicious caller-supplied audit fields'
   const parsed = JSON.parse(raw);
   assert.deepEqual(Object.keys(parsed), AUDIT_KEYS);
   assert.equal(raw.includes(SECRET), false);
-  assert.equal(parsed.rationale, OMITTED_RATIONALE);
-  assert.equal(parsed.feedback_code, null);
-  assert.equal(parsed.feedback_status, null);
+  assert.equal(parsed.rationale, null);
+  assert.equal(parsed.feedback_code, 'invalid_judge_response');
+  assert.equal(parsed.feedback_status, 'blocked');
   for (const key of [
     'prompt',
     'userPrompt',
@@ -671,36 +942,92 @@ test('writer removes enum-valid feedback metadata that contradicts delivery sema
     .split('\n')
     .map((line) => JSON.parse(line));
   assert.equal(events.length, contradictory.length);
-  for (const event of events) {
-    assert.equal(event.feedback_code, null);
-    assert.equal(event.feedback_status, null);
-  }
+  assert.deepEqual(events.map((event) => [
+    event.decision_source,
+    event.outcome,
+    event.feedback_code,
+    event.feedback_status,
+  ]), [
+    ['failure', 'failure', 'invalid_judge_response', 'blocked'],
+    ['failure', 'failure', null, null],
+    ['failure', 'failure', 'invalid_judge_response', 'approval_required'],
+    ['failure', 'failure', 'invalid_judge_response', 'blocked'],
+    ['failure', 'failure', 'invalid_judge_response', 'approval_required'],
+    ['failure', 'failure', 'invalid_judge_response', 'approval_required'],
+    ['failure', 'failure', 'invalid_judge_response', 'approval_required'],
+    ['failure', 'failure', 'invalid_judge_response', 'blocked'],
+  ]);
 });
 
 test('writer preserves only semantically compatible feedback metadata', async (t) => {
   const { filePath } = await tempAudit(t);
   const writer = createAuditWriter({ filePath });
+  const action = makeAction();
+  const rawDeny = makeJudgeResult({
+    decision: 'deny',
+    reason_code: 'out_of_scope',
+  }, action);
+  const rawReview = makeJudgeResult({
+    decision: 'review',
+    reason_code: 'authorization_missing',
+  }, action);
+  const rawAllow = makeJudgeResult({}, action);
   const valid = [
-    ['deny', 'supervised', 'out_of_scope', 'blocked'],
-    ['review', 'autonomous', 'authorization_missing', 'blocked'],
-    ['failure', 'supervised', 'judge_unavailable', 'approval_required'],
-    ['deny', 'autonomous', 'local_policy_review', 'blocked'],
-    ['deny', 'autonomous', 'judge_unavailable', 'blocked'],
-    ['deny', 'autonomous', 'invalid_judge_response', 'blocked'],
-    ['review', 'supervised', 'hard_policy_block', 'blocked'],
-    ['failure', 'supervised', 'repeated_denials', 'blocked'],
+    buildAuditEvent({
+      action,
+      judgeResult: rawDeny,
+      normalized: { kind: 'deny', verdict: rawDeny.verdict },
+      mode: 'supervised',
+      enforcement: 'enforce',
+      decisionSource: 'llm',
+    }),
+    buildAuditEvent({
+      action,
+      judgeResult: rawReview,
+      normalized: { kind: 'review', verdict: rawReview.verdict },
+      mode: 'autonomous',
+      enforcement: 'enforce',
+      decisionSource: 'llm',
+    }),
+    buildAuditEvent({
+      action,
+      normalized: { kind: 'failure', feedback_code: 'judge_unavailable' },
+      mode: 'supervised',
+      enforcement: 'enforce',
+      decisionSource: 'failure',
+    }),
+    buildAuditEvent({
+      action,
+      judgeResult: rawAllow,
+      normalized: { kind: 'review', local_guard: true, verdict: rawAllow.verdict },
+      mode: 'autonomous',
+      enforcement: 'enforce',
+      decisionSource: 'local_downgrade',
+    }),
+    buildAuditEvent({
+      action,
+      normalized: { kind: 'failure', feedback_code: 'invalid_judge_response' },
+      mode: 'autonomous',
+      enforcement: 'enforce',
+      decisionSource: 'failure',
+    }),
+    buildAuditEvent({
+      action,
+      normalized: { kind: 'deny', feedback_code: 'hard_policy_block' },
+      mode: 'supervised',
+      enforcement: 'enforce',
+      decisionSource: 'hard_boundary',
+    }),
+    buildAuditEvent({
+      action,
+      normalized: { kind: 'deny', feedback_code: 'repeated_denials' },
+      mode: 'supervised',
+      enforcement: 'enforce',
+      decisionSource: 'circuit_breaker',
+    }),
   ];
 
-  for (const [outcome, mode, feedbackCode, feedbackStatus] of valid) {
-    assert.equal(await writer.write({
-      ...buildAuditEvent(),
-      outcome,
-      mode,
-      enforcement: 'enforce',
-      feedback_code: feedbackCode,
-      feedback_status: feedbackStatus,
-    }), true);
-  }
+  for (const event of valid) assert.equal(await writer.write(event), true);
 
   const events = (await fs.readFile(filePath, 'utf8'))
     .trimEnd()
@@ -711,7 +1038,6 @@ test('writer preserves only semantically compatible feedback metadata', async (t
     ['authorization_missing', 'blocked'],
     ['judge_unavailable', 'approval_required'],
     ['local_policy_review', 'blocked'],
-    ['judge_unavailable', 'blocked'],
     ['invalid_judge_response', 'blocked'],
     ['hard_policy_block', 'blocked'],
     ['repeated_denials', 'blocked'],
@@ -721,14 +1047,21 @@ test('writer preserves only semantically compatible feedback metadata', async (t
 test('concurrent writes use independent handles and preserve one JSON object per line', async (t) => {
   const { filePath } = await tempAudit(t);
   const writer = createAuditWriter({ filePath });
-  const writes = Array.from({ length: 16 }, (_, index) => writer.write(buildAuditEvent({
-    action: makeAction({ run_id: `run-${index}` }),
-    judgeResult: makeJudgeResult({ rationale: null }),
-    normalized: { kind: index % 2 === 0 ? 'allow' : 'review' },
-    latencyMs: index,
-    mode: 'supervised',
-    enforcement: 'shadow',
-  })));
+  const writes = Array.from({ length: 16 }, (_, index) => {
+    const action = makeAction({ run_id: `run-${index}` });
+    const decision = index % 2 === 0 ? 'allow' : 'review';
+    return writer.write(buildAuditEvent({
+      action,
+      judgeResult: makeJudgeResult({
+        decision,
+        reason_code: decision === 'allow' ? 'safe_and_authorized' : 'other_policy_risk',
+      }, action),
+      normalized: { kind: decision },
+      latencyMs: index,
+      mode: 'supervised',
+      enforcement: 'shadow',
+    }));
+  });
 
   assert.deepEqual(await Promise.all(writes), Array(16).fill(true));
 
@@ -745,7 +1078,7 @@ test('concurrent writes use independent handles and preserve one JSON object per
 test('writer never throws, closes opened handles, and logs one fixed message per fs failure', async (t) => {
   const safeEvent = buildAuditEvent({
     action: makeAction(),
-    judgeResult: makeJudgeResult({ rationale: null }),
+    judgeResult: makeJudgeResult(),
     normalized: { kind: 'allow' },
     latencyMs: 1,
     mode: 'supervised',
@@ -820,7 +1153,7 @@ test('writer never throws, closes opened handles, and logs one fixed message per
 test('writer rejects missing or hostile regular-file checks before chmod or append', async (t) => {
   const safeEvent = buildAuditEvent({
     action: makeAction(),
-    judgeResult: makeJudgeResult({ rationale: null }),
+    judgeResult: makeJudgeResult(),
     normalized: { kind: 'allow' },
     latencyMs: 1,
     mode: 'supervised',

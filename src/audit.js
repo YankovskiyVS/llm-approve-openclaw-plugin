@@ -3,9 +3,14 @@ import { constants as fsConstants } from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { types as utilTypes } from 'node:util';
 import { computeActionHash } from './action.js';
 import { MODEL_ID, PLUGIN_ID, POLICY_VERSION } from './constants.js';
-import { JUDGE_REASON_CODES } from './judge-schema.js';
+import {
+  JUDGE_REASON_CODES,
+  JUDGE_VERDICT_KEYS,
+  validateJudgeVerdict,
+} from './judge-schema.js';
 import {
   FEEDBACK_CODES,
   FEEDBACK_STATUSES,
@@ -22,6 +27,14 @@ const REASON_CODES = new Set(JUDGE_REASON_CODES);
 const OUTCOMES = new Set(['allow', 'deny', 'review', 'failure']);
 const MODES = new Set(['autonomous', 'supervised']);
 const ENFORCEMENTS = new Set(['shadow', 'enforce']);
+const DECISION_SOURCES = new Set([
+  'hard_boundary',
+  'circuit_breaker',
+  'llm',
+  'local_downgrade',
+  'failure',
+]);
+const SAFE_PATH_FAMILIES = new Set(['session_status_current', 'browser_wait']);
 const CLOSED_FEEDBACK_CODES = new Set(FEEDBACK_CODES);
 const CLOSED_FEEDBACK_STATUSES = new Set(FEEDBACK_STATUSES);
 const MODEL_FEEDBACK_CODES = new Set(
@@ -31,6 +44,9 @@ const OMITTED_RATIONALE = '[model rationale omitted]';
 const WRITE_FAILED_MESSAGE = 'LLM action judge audit write failed';
 const INVALID_WRITER_OPTIONS = 'invalid audit writer options';
 const MAX_TOOL_NAME_LENGTH = 256;
+const SAFE_REASON_CODE = 'safe_and_authorized';
+const LOCAL_FEEDBACK_CODES = new Set(['local_policy_review', 'opaque_or_unverifiable']);
+const FAILURE_FEEDBACK_CODES = new Set(['judge_unavailable', 'invalid_judge_response']);
 
 function auditOpenFlags() {
   const required = [
@@ -75,6 +91,10 @@ function emptyAuditEvent() {
     latency_ms: null,
     mode: null,
     enforcement: null,
+    decision_source: 'failure',
+    safe_path_candidate: false,
+    safe_path_family: null,
+    safe_path_disagreement: null,
     feedback_code: null,
     feedback_status: null,
     rationale: null,
@@ -150,6 +170,44 @@ function judgeVerdict(judgeResult) {
   return nested !== null && typeof nested === 'object' ? nested : judgeResult;
 }
 
+function rawJudgeSnapshot(judgeResult, expectedActionHash) {
+  if (judgeResult === undefined || judgeResult === null) {
+    return { present: false, valid: true, verdict: null };
+  }
+  try {
+    const verdict = judgeVerdict(judgeResult);
+    if (verdict === null || typeof verdict !== 'object' || utilTypes.isProxy(verdict)) {
+      return { present: true, valid: false, verdict: null };
+    }
+    const prototype = Object.getPrototypeOf(verdict);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return { present: true, valid: false, verdict: null };
+    }
+    const keys = Reflect.ownKeys(verdict);
+    if (keys.length !== JUDGE_VERDICT_KEYS.length
+      || keys.some((key) => typeof key !== 'string' || !JUDGE_VERDICT_KEYS.includes(key))) {
+      return { present: true, valid: false, verdict: null };
+    }
+    const snapshot = {};
+    for (const key of JUDGE_VERDICT_KEYS) {
+      const descriptor = Object.getOwnPropertyDescriptor(verdict, key);
+      if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+        return { present: true, valid: false, verdict: null };
+      }
+      snapshot[key] = descriptor.value;
+    }
+    validateJudgeVerdict(snapshot);
+    if (snapshot.action_hash !== expectedActionHash
+      || typeof snapshot.rationale !== 'string'
+      || snapshot.rationale.trim() === '') {
+      return { present: true, valid: false, verdict: null };
+    }
+    return { present: true, valid: true, verdict: snapshot };
+  } catch {
+    return { present: true, valid: false, verdict: null };
+  }
+}
+
 function feedbackMetadata(normalized, outcome, mode, enforcement) {
   if (enforcement !== 'enforce') return { code: null, status: null };
   if (outcome === 'allow') return { code: null, status: null };
@@ -164,30 +222,148 @@ function feedbackMetadata(normalized, outcome, mode, enforcement) {
   return { code: null, status: null };
 }
 
-function sanitizeFeedbackMetadata(code, status, outcome, mode, enforcement) {
-  if (enforcement !== 'enforce' || outcome === 'allow') return { code: null, status: null };
-  if (!CLOSED_FEEDBACK_CODES.has(code) || !CLOSED_FEEDBACK_STATUSES.has(status)) {
-    return { code: null, status: null };
+function inferredDecisionSource(normalized, outcome) {
+  const code = selectFeedbackCode(normalized);
+  if (code === 'hard_policy_block') return 'hard_boundary';
+  if (code === 'repeated_denials') return 'circuit_breaker';
+  if (outcome === 'failure') return 'failure';
+  if (ownDataValue(normalized, 'local_guard') === true
+    || ownDataValue(normalized, 'opaque') === true) return 'local_downgrade';
+  return 'llm';
+}
+
+function judgeTupleState(event) {
+  const values = [
+    event.decision,
+    event.risk,
+    event.authorization,
+    event.confidence,
+    event.reason_code,
+  ];
+  if (values.every((value) => value === null) && event.rationale === null) return 'absent';
+  const complete = DECISIONS.has(event.decision)
+    && RISKS.has(event.risk)
+    && AUTHORIZATIONS.has(event.authorization)
+    && validConfidence(event.confidence) !== null
+    && REASON_CODES.has(event.reason_code)
+    && event.rationale === OMITTED_RATIONALE
+    && ((event.decision === 'allow') === (event.reason_code === SAFE_REASON_CODE));
+  return complete ? 'complete' : 'invalid';
+}
+
+function expectedFeedbackStatus(mode, outcome, code) {
+  if (outcome === 'deny' || feedbackRequiresBlock(code)) return 'blocked';
+  if (outcome === 'review' || outcome === 'failure') {
+    return mode === 'autonomous' ? 'blocked' : 'approval_required';
   }
-  const codeMatchesOutcome = outcome === 'deny'
-    || (feedbackRequiresBlock(code)
-      ? outcome === 'review' || outcome === 'failure'
-      : code === 'local_policy_review'
-        ? outcome === 'review'
-        : code === 'judge_unavailable' || code === 'invalid_judge_response'
-          ? outcome === 'failure'
-          : MODEL_FEEDBACK_CODES.has(code) && outcome === 'review');
-  if (!codeMatchesOutcome) return { code: null, status: null };
-  let expectedStatus = null;
-  if (outcome === 'deny' || feedbackRequiresBlock(code)) {
-    expectedStatus = 'blocked';
-  } else if (outcome === 'review' || outcome === 'failure') {
-    if (mode === 'autonomous') expectedStatus = 'blocked';
-    if (mode === 'supervised') expectedStatus = 'approval_required';
+  return null;
+}
+
+function feedbackSemanticsValid(event) {
+  if (event.enforcement === 'shadow') {
+    return event.feedback_code === null && event.feedback_status === null;
   }
-  return status === expectedStatus
-    ? { code, status }
-    : { code: null, status: null };
+  if (event.enforcement !== 'enforce') return false;
+
+  let validCode = false;
+  if (event.decision_source === 'hard_boundary') {
+    validCode = event.feedback_code === 'hard_policy_block';
+  } else if (event.decision_source === 'circuit_breaker') {
+    validCode = event.feedback_code === 'repeated_denials';
+  } else if (event.decision_source === 'local_downgrade') {
+    validCode = LOCAL_FEEDBACK_CODES.has(event.feedback_code);
+  } else if (event.decision_source === 'failure') {
+    validCode = FAILURE_FEEDBACK_CODES.has(event.feedback_code);
+  } else if (event.outcome === 'allow') {
+    return event.feedback_code === null && event.feedback_status === null;
+  } else {
+    validCode = MODEL_FEEDBACK_CODES.has(event.feedback_code)
+      && event.feedback_code === event.reason_code;
+  }
+  return validCode
+    && event.feedback_status === expectedFeedbackStatus(
+      event.mode,
+      event.outcome,
+      event.feedback_code,
+    );
+}
+
+function safePathSemanticsValid(event) {
+  if (event.safe_path_candidate === false) {
+    return event.safe_path_family === null && event.safe_path_disagreement === null;
+  }
+  if (event.safe_path_candidate !== true
+    || !SAFE_PATH_FAMILIES.has(event.safe_path_family)
+    || typeof event.safe_path_disagreement !== 'boolean'
+    || event.decision_source === 'hard_boundary') return false;
+  return event.decision_source === 'circuit_breaker'
+    || event.safe_path_disagreement === (event.outcome !== 'allow');
+}
+
+function auditSemanticsValid(event, rawJudgeContractValid = true) {
+  if (!rawJudgeContractValid) return false;
+  const tupleState = judgeTupleState(event);
+  if (tupleState === 'invalid') return false;
+
+  const fallback = event.mode === null && event.enforcement === null;
+  if (fallback) {
+    return event.decision_source === 'failure'
+      && event.outcome === 'failure'
+      && tupleState === 'absent'
+      && event.feedback_code === null
+      && event.feedback_status === null
+      && safePathSemanticsValid(event);
+  }
+  if (!MODES.has(event.mode) || !ENFORCEMENTS.has(event.enforcement)) return false;
+
+  let sourceValid = false;
+  if (event.decision_source === 'hard_boundary') {
+    sourceValid = event.outcome === 'deny';
+  } else if (event.decision_source === 'circuit_breaker') {
+    sourceValid = event.outcome === 'deny';
+  } else if (event.decision_source === 'local_downgrade') {
+    sourceValid = event.outcome === 'review'
+      && tupleState === 'complete'
+      && event.decision === 'allow';
+  } else if (event.decision_source === 'failure') {
+    sourceValid = event.outcome === 'failure';
+  } else if (event.decision_source === 'llm') {
+    sourceValid = tupleState === 'complete' && event.decision === event.outcome;
+  }
+  return sourceValid && feedbackSemanticsValid(event) && safePathSemanticsValid(event);
+}
+
+function collapseSemanticFailure(event) {
+  event.decision = null;
+  event.risk = null;
+  event.authorization = null;
+  event.confidence = null;
+  event.reason_code = null;
+  event.outcome = 'failure';
+  event.decision_source = 'failure';
+  event.safe_path_candidate = false;
+  event.safe_path_family = null;
+  event.safe_path_disagreement = null;
+  event.rationale = null;
+  if (MODES.has(event.mode) && ENFORCEMENTS.has(event.enforcement)) {
+    if (event.enforcement === 'enforce') {
+      event.feedback_code = 'invalid_judge_response';
+      event.feedback_status = expectedFeedbackStatus(
+        event.mode,
+        event.outcome,
+        event.feedback_code,
+      );
+    } else {
+      event.feedback_code = null;
+      event.feedback_status = null;
+    }
+  } else {
+    event.mode = null;
+    event.enforcement = null;
+    event.feedback_code = null;
+    event.feedback_status = null;
+  }
+  return event;
 }
 
 export function buildAuditEvent(input = {}) {
@@ -195,7 +371,7 @@ export function buildAuditEvent(input = {}) {
     if (input === null || typeof input !== 'object') return emptyAuditEvent();
 
     const action = ownDataValue(input, 'action');
-    const judgeResult = judgeVerdict(ownDataValue(input, 'judgeResult'));
+    const rawJudgeInput = ownDataValue(input, 'judgeResult');
     const normalized = ownDataValue(input, 'normalized');
     const event = emptyAuditEvent();
 
@@ -210,6 +386,8 @@ export function buildAuditEvent(input = {}) {
       'tool_call_id',
       ownDataValue(action, 'tool_call_id'),
     );
+    const rawJudge = rawJudgeSnapshot(rawJudgeInput, event.action_hash);
+    const judgeResult = rawJudge.verdict;
     event.decision = validEnum(ownDataValue(judgeResult, 'decision'), DECISIONS);
     event.risk = validEnum(ownDataValue(judgeResult, 'risk'), RISKS);
     event.authorization = validEnum(
@@ -230,7 +408,23 @@ export function buildAuditEvent(input = {}) {
     );
     event.feedback_code = feedback.code;
     event.feedback_status = feedback.status;
+    const explicitSource = ownDataValue(input, 'decisionSource');
+    const source = explicitSource === undefined
+      ? inferredDecisionSource(normalized, event.outcome)
+      : validEnum(explicitSource, DECISION_SOURCES);
+    const explicitCandidate = ownDataValue(input, 'safePathCandidate');
+    const candidate = explicitCandidate === undefined ? false : explicitCandidate;
+    const explicitFamily = ownDataValue(input, 'safePathFamily');
+    const family = explicitFamily === undefined ? null : explicitFamily;
+    const explicitDisagreement = ownDataValue(input, 'safePathDisagreement');
+    const disagreement = explicitDisagreement === undefined ? null : explicitDisagreement;
+    event.decision_source = source;
+    event.safe_path_candidate = candidate;
+    event.safe_path_family = family;
+    event.safe_path_disagreement = disagreement;
     event.rationale = rationaleIndicator(ownDataValue(judgeResult, 'rationale'));
+
+    if (!auditSemanticsValid(event, rawJudge.valid)) collapseSemanticFailure(event);
 
     return event;
   } catch {
@@ -271,16 +465,20 @@ function sanitizeAuditEvent(input) {
     ownDataValue(input, 'feedback_status'),
     CLOSED_FEEDBACK_STATUSES,
   );
-  const feedback = sanitizeFeedbackMetadata(
-    feedbackCode,
-    feedbackStatus,
-    event.outcome,
-    event.mode,
-    event.enforcement,
+  event.feedback_code = feedbackCode;
+  event.feedback_status = feedbackStatus;
+  event.decision_source = validEnum(
+    ownDataValue(input, 'decision_source'),
+    DECISION_SOURCES,
   );
-  event.feedback_code = feedback.code;
-  event.feedback_status = feedback.status;
+  event.safe_path_candidate = ownDataValue(input, 'safe_path_candidate');
+  event.safe_path_family = validEnum(
+    ownDataValue(input, 'safe_path_family'),
+    SAFE_PATH_FAMILIES,
+  );
+  event.safe_path_disagreement = ownDataValue(input, 'safe_path_disagreement');
   event.rationale = rationaleIndicator(ownDataValue(input, 'rationale'));
+  if (!auditSemanticsValid(event)) collapseSemanticFailure(event);
   return event;
 }
 

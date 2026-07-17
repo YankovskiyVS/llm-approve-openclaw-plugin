@@ -1,4 +1,7 @@
 import { types as utilTypes } from 'node:util';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createAction, createJudgeEnvelope } from './action.js';
 import { buildAuditEvent, createAuditWriter } from './audit.js';
 import {
@@ -22,7 +25,7 @@ import {
   normalizeVerdict,
   parseJudgeResponse,
 } from './decision.js';
-import { resolveRuntimeSettings } from './environment.js';
+import { resolvePolicySettings, resolveRuntimeSettings } from './environment.js';
 import {
   JUDGE_DECISIONS,
   JUDGE_VERDICT_KEYS,
@@ -37,6 +40,8 @@ import {
   classifyToolFamily,
   createRunDecisionStore,
 } from './run-decision-store.js';
+import { assessPolicyRoute } from './policy-routing.js';
+import { redactForJudgeWithProvenance } from './redact.js';
 
 const PLUGIN_NAME = 'LLM Action Judge';
 const PLUGIN_DESCRIPTION = 'LLM-gated tool-call approval for OpenClaw';
@@ -46,12 +51,19 @@ const STORE_MAX_ENTRIES = 1000;
 const DECISION_STORE_HISTORY_LIMIT = 50;
 const DECISION_STORE_CONSECUTIVE_DENY_LIMIT = 3;
 const DECISION_STORE_ROLLING_DENY_LIMIT = 10;
+const PLUGIN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MAX_DECISION_ID_LENGTH = 256;
 const MAX_DECISION_ID_BYTES = 512;
 const SETUP_FAILED_MESSAGE = 'LLM action judge setup failed';
 const REGISTERED_MESSAGE = 'LLM action judge registered';
 const FAILURE_REASON = 'judge evaluation failed';
 const SAFE_CONFIG = Object.freeze({ mode: 'supervised', enforcement: 'enforce' });
+const SAFE_AUDIT_ROOT = join(homedir(), '.openclaw', 'logs');
+const SAFE_POLICY_SETTINGS = Object.freeze({
+  config: SAFE_CONFIG,
+  auditPath: join(SAFE_AUDIT_ROOT, 'llm-action-judge.jsonl'),
+  auditRoot: SAFE_AUDIT_ROOT,
+});
 const LOG_LEVEL_RANK = Object.freeze({ silent: -1, error: 0, warn: 1, info: 2 });
 const OUTCOMES = new Set(JUDGE_DECISIONS);
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
@@ -67,15 +79,29 @@ const GET_OWN_PROPERTY_DESCRIPTOR = Object.getOwnPropertyDescriptor;
 const HAS_OWN = Object.hasOwn;
 const REFLECT_OWN_KEYS = Reflect.ownKeys;
 const CREATE_OBJECT = Object.create;
+const FREEZE_OBJECT = Object.freeze;
 const IS_PROXY = utilTypes.isProxy;
 const REFLECT_APPLY = Reflect.apply;
 const REGEXP_TEST = RegExp.prototype.test;
+const SET_HAS = Set.prototype.has;
 const STRING_TRIM = String.prototype.trim;
 const DECISION_STATUS_KEYS = Object.freeze([
   'already_tripped',
   'newly_tripped',
   'tripped',
 ]);
+const ROUTE_RESULT_KEYS = Object.freeze([
+  'route',
+  'hard_boundary',
+  'safe_path_candidate',
+  'safe_path_family',
+]);
+const HARD_BOUNDARIES = new Set([
+  'self_modification',
+  'secret_external_sink',
+  'security_boundary_bypass',
+]);
+const SAFE_PATH_FAMILIES = new Set(['session_status_current', 'browser_wait']);
 
 function readData(source, key) {
   try {
@@ -364,6 +390,133 @@ function repeatedDenials() {
   return { kind: 'deny', feedback_code: 'repeated_denials' };
 }
 
+function hardPolicyBlock() {
+  return { kind: 'deny', feedback_code: 'hard_policy_block' };
+}
+
+function applyTechnicalFailureMonotonically(result, decisionSource) {
+  const kind = readData(result, 'kind');
+  if (decisionSource === 'circuit_breaker'
+    || decisionSource === 'hard_boundary'
+    || kind.ok && kind.value === 'deny') {
+    return { result, decisionSource };
+  }
+  return { result: failure(), decisionSource: 'failure' };
+}
+
+function policyRouteSnapshot(value) {
+  try {
+    if (value === null || typeof value !== 'object' || ARRAY_IS_ARRAY(value)
+      || IS_PROXY(value)) return null;
+    const prototype = GET_PROTOTYPE_OF(value);
+    if (prototype !== OBJECT_PROTOTYPE && prototype !== null) return null;
+    const keys = REFLECT_OWN_KEYS(value);
+    if (keys.length !== ROUTE_RESULT_KEYS.length) return null;
+    const snapshot = CREATE_OBJECT(null);
+    for (let index = 0; index < ROUTE_RESULT_KEYS.length; index += 1) {
+      const key = ROUTE_RESULT_KEYS[index];
+      const descriptor = GET_OWN_PROPERTY_DESCRIPTOR(value, key);
+      if (!descriptor || !descriptor.enumerable || !HAS_OWN(descriptor, 'value')) return null;
+      snapshot[key] = descriptor.value;
+    }
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index];
+      if (typeof key !== 'string'
+        || (key !== 'route'
+          && key !== 'hard_boundary'
+          && key !== 'safe_path_candidate'
+          && key !== 'safe_path_family')) return null;
+    }
+    if (snapshot.route === 'hard_deny') {
+      return typeof snapshot.hard_boundary === 'string'
+        && REFLECT_APPLY(SET_HAS, HARD_BOUNDARIES, [snapshot.hard_boundary])
+        && snapshot.safe_path_candidate === false
+        && snapshot.safe_path_family === null
+        ? snapshot
+        : null;
+    }
+    if (snapshot.route !== 'judge' || snapshot.hard_boundary !== null
+      || typeof snapshot.safe_path_candidate !== 'boolean') return null;
+    if (snapshot.safe_path_candidate) {
+      return typeof snapshot.safe_path_family === 'string'
+        && REFLECT_APPLY(SET_HAS, SAFE_PATH_FAMILIES, [snapshot.safe_path_family])
+        ? snapshot
+        : null;
+    }
+    return snapshot.safe_path_family === null ? snapshot : null;
+  } catch {
+    return null;
+  }
+}
+
+function samePolicyRoute(left, right) {
+  return left !== null
+    && right !== null
+    && left.route === right.route
+    && left.hard_boundary === right.hard_boundary
+    && left.safe_path_candidate === right.safe_path_candidate
+    && left.safe_path_family === right.safe_path_family;
+}
+
+function freezeDetachedData(value, ancestors) {
+  let lineage = ancestors;
+  if (lineage === undefined) {
+    lineage = [];
+    SET_PROTOTYPE_OF(lineage, null);
+  }
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object' || IS_PROXY(value)) return false;
+  for (let index = 0; index < lineage.length; index += 1) {
+    if (lineage[index] === value) return false;
+  }
+  const prototype = GET_PROTOTYPE_OF(value);
+  if (ARRAY_IS_ARRAY(value)) {
+    if (prototype !== ARRAY_PROTOTYPE && prototype !== null) return false;
+  } else if (prototype !== OBJECT_PROTOTYPE && prototype !== null) {
+    return false;
+  }
+  lineage[lineage.length] = value;
+  try {
+    const keys = REFLECT_OWN_KEYS(value);
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index];
+      if (typeof key !== 'string') return false;
+      if (key === 'length' && ARRAY_IS_ARRAY(value)) continue;
+      const descriptor = GET_OWN_PROPERTY_DESCRIPTOR(value, key);
+      if (!descriptor || !HAS_OWN(descriptor, 'value')
+        || !freezeDetachedData(descriptor.value, lineage)) return false;
+    }
+    FREEZE_OBJECT(value);
+    return true;
+  } finally {
+    lineage.length -= 1;
+  }
+}
+
+function immutableVisibleParams(action) {
+  const envelope = createJudgeEnvelope(action);
+  const params = readData(envelope, 'params');
+  if (!params.ok || !freezeDetachedData(params.value)) {
+    throw new TypeError('invalid visible params snapshot');
+  }
+  return params.value;
+}
+
+function ordinaryDecisionSource(result, judgeResult) {
+  const kind = readData(result, 'kind');
+  if (!kind.ok || kind.value === 'failure') return 'failure';
+  const localGuard = readData(result, 'local_guard');
+  const opaque = readData(result, 'opaque');
+  const decision = readData(judgeResult, 'decision');
+  if (localGuard.ok && localGuard.value === true
+    || opaque.ok && opaque.value === true
+    || decision.ok && decision.value === 'allow' && kind.value !== 'allow') {
+    return 'local_downgrade';
+  }
+  return 'llm';
+}
+
 function decisionMetadata(identity, result, judgeResult) {
   const outcome = selectFeedbackOutcome(result);
   const reasonCode = outcome === 'allow'
@@ -474,11 +627,23 @@ function safeFallbackMapping(config, result, params) {
   return { block: true, blockReason: createBlockFeedback(feedbackCode) };
 }
 
-function mapSafely(config, result, params) {
+function mapSafely(mapper, config, result, params, decisionSource) {
   try {
-    return mapVerdict({ ...config, result, params });
+    if (typeof mapper !== 'function') throw new TypeError('invalid decision mapper');
+    return {
+      value: mapper({ ...config, result, params }),
+      effectiveResult: result,
+      effectiveDecisionSource: decisionSource,
+      fellBack: false,
+    };
   } catch {
-    return safeFallbackMapping(config, failure(), params);
+    const effective = applyTechnicalFailureMonotonically(result, decisionSource);
+    return {
+      value: safeFallbackMapping(config, effective.result, params),
+      effectiveResult: effective.result,
+      effectiveDecisionSource: effective.decisionSource,
+      fellBack: true,
+    };
   }
 }
 
@@ -563,32 +728,49 @@ export function createActionJudgePlugin(deps = {}) {
   );
   const clientFactory = dependencyValue(deps, 'createJudgeClient', createJudgeClient);
   const auditFactory = dependencyValue(deps, 'createAuditWriter', createAuditWriter);
+  const assessRoute = dependencyValue(deps, 'assessPolicyRoute', assessPolicyRoute);
   const injectedEnvironment = dependencyValue(deps, 'environment', undefined);
   const parse = dependencyValue(deps, 'parseJudgeResponse', parseJudgeResponse);
   const normalize = dependencyValue(deps, 'normalizeVerdict', normalizeVerdict);
+  const mapper = dependencyValue(deps, 'mapVerdict', mapVerdict);
 
   function register(api) {
     let setupFailed = false;
     let enforcementRegistrationFailed = false;
     let settingsValid = true;
     let settings;
+    let policySettings;
     let config;
     const pluginConfig = readData(api, 'pluginConfig');
+    const settingsInput = {
+      environment: injectedEnvironment === undefined ? process.env : injectedEnvironment,
+      pluginConfig: pluginConfig.ok ? pluginConfig.value : undefined,
+      getSharedProvider() {
+        const provider = nestedData(api, ['config', 'models', 'providers', 'cloudru']);
+        if (!provider.ok) throw new TypeError('invalid provider config');
+        return provider.value;
+      },
+    };
     try {
       if (!pluginConfig.ok) throw new TypeError('invalid plugin config');
-      settings = resolveRuntimeSettings({
-        environment: injectedEnvironment === undefined ? process.env : injectedEnvironment,
-        pluginConfig: pluginConfig.value,
-        getSharedProvider() {
-          const provider = nestedData(api, ['config', 'models', 'providers', 'cloudru']);
-          if (!provider.ok) throw new TypeError('invalid provider config');
-          return provider.value;
-        },
-      });
+      policySettings = resolvePolicySettings(settingsInput);
+      config = policySettings.config;
+    } catch {
+      policySettings = SAFE_POLICY_SETTINGS;
+      config = SAFE_CONFIG;
+      setupFailed = true;
+    }
+    try {
+      if (!pluginConfig.ok) throw new TypeError('invalid plugin config');
+      settings = resolveRuntimeSettings(settingsInput);
       config = settings.config;
     } catch {
-      config = SAFE_CONFIG;
       settingsValid = false;
+      // A runtime-only configuration failure (provider, timeout, log level, or
+      // an unknown OPENCLAW_JUDGE_* variable) must not inherit a policy-only
+      // shadow profile. Keep policy paths available for deterministic routing
+      // and audit, but make the effective delivery posture fail-closed.
+      config = SAFE_CONFIG;
       setupFailed = true;
     }
     const lifecycleLogger = createLifecycleLogger(
@@ -648,14 +830,12 @@ export function createActionJudgePlugin(deps = {}) {
     }
 
     let audit = injectedAudit;
-    if (!settingsValid) {
-      audit = inertAudit();
-    } else if (audit === undefined) {
+    if (audit === undefined && policySettings !== undefined) {
       try {
         if (typeof auditFactory !== 'function') throw new TypeError('invalid audit factory');
         audit = auditFactory({
-          filePath: settings.auditPath,
-          rootPath: settings.auditRoot,
+          filePath: policySettings.auditPath,
+          rootPath: policySettings.auditRoot,
           logger: lifecycleLogger,
         });
       } catch {
@@ -663,6 +843,7 @@ export function createActionJudgePlugin(deps = {}) {
         setupFailed = true;
       }
     }
+    if (audit === undefined) audit = inertAudit();
 
     function captureTrustedIntent(event, ctx) {
       try {
@@ -688,6 +869,18 @@ export function createActionJudgePlugin(deps = {}) {
       let trackedIdentity;
       let decisionStoreCheckFailed = false;
       let skipJudge = false;
+      let breakerCandidate = false;
+      let hardBoundaryCandidate = false;
+      let decisionSource = 'failure';
+      let safePathCandidate = false;
+      let safePathFamily = null;
+      let safePathDisagreement = null;
+      let routeSnapshot;
+      let localVisibleParams;
+      let localToolName;
+      let routeAssessmentFailed = false;
+      let assessingRoute = false;
+      let mappedDecision;
 
       try {
         const identity = identitySnapshot(event, ctx);
@@ -697,12 +890,14 @@ export function createActionJudgePlugin(deps = {}) {
             const alreadyTripped = readDecisionStoreTrip(decisionStore, identity.runId);
             if (alreadyTripped) {
               result = repeatedDenials();
+              decisionSource = 'circuit_breaker';
+              breakerCandidate = true;
               if (config.enforcement !== 'shadow') skipJudge = true;
             }
           } catch {
             result = failure();
+            decisionSource = 'failure';
             decisionStoreCheckFailed = true;
-            skipJudge = true;
           }
         }
 
@@ -711,11 +906,60 @@ export function createActionJudgePlugin(deps = {}) {
           action = createAction({ event, ctx });
           const copiedParams = plainParams(action);
           if (copiedParams !== null) params = copiedParams;
-          envelope = createJudgeEnvelope(action);
-          const hash = readData(envelope, 'action_hash');
-          expectedHash = hash.ok ? hash.value : undefined;
+          if (!skipJudge && policySettings !== undefined) {
+            if (typeof assessRoute !== 'function') throw new TypeError('invalid route assessor');
+            assessingRoute = true;
+            const route = policyRouteSnapshot(assessRoute({
+              action,
+              pluginRoot: PLUGIN_ROOT,
+              auditPath: policySettings.auditPath,
+              redaction: redactForJudgeWithProvenance(action.params),
+            }));
+            if (route === null) throw new TypeError('invalid route assessment');
+            assessingRoute = false;
+            routeSnapshot = route;
+            safePathCandidate = route.safe_path_candidate;
+            safePathFamily = route.safe_path_family;
+            hardBoundaryCandidate = route.route === 'hard_deny';
+            if (hardBoundaryCandidate && config.enforcement !== 'shadow') {
+              result = hardPolicyBlock();
+              decisionSource = 'hard_boundary';
+              skipJudge = true;
+            }
+          }
+          if (!skipJudge && policySettings === undefined) {
+            result = failure();
+            decisionSource = 'failure';
+            skipJudge = true;
+          }
+          if (!skipJudge && !settingsValid) {
+            result = failure('judge_unavailable');
+            decisionSource = 'failure';
+            skipJudge = true;
+          }
+          if (!skipJudge) {
+            localVisibleParams = immutableVisibleParams(action);
+            const actionTool = readData(action, 'tool_name');
+            if (!actionTool.ok || typeof actionTool.value !== 'string') {
+              throw new TypeError('invalid local tool snapshot');
+            }
+            localToolName = actionTool.value;
+            envelope = createJudgeEnvelope(action);
+            const hash = readData(envelope, 'action_hash');
+            expectedHash = hash.ok ? hash.value : undefined;
+          }
         } catch {
+          routeAssessmentFailed = assessingRoute;
+          assessingRoute = false;
           envelope = undefined;
+          skipJudge = true;
+          if (routeAssessmentFailed && config.enforcement === 'shadow'
+            || !breakerCandidate && !hardBoundaryCandidate) {
+            result = failure();
+            decisionSource = 'failure';
+            safePathCandidate = false;
+            safePathFamily = null;
+          }
         }
 
         if (trackedIdentity !== undefined && !skipJudge
@@ -734,7 +978,21 @@ export function createActionJudgePlugin(deps = {}) {
               } catch {
                 result = failure('judge_unavailable');
               }
-              if (reviewed === undefined) {
+              let routeConsistent = false;
+              try {
+                const freshRoute = policyRouteSnapshot(assessRoute({
+                  action,
+                  pluginRoot: PLUGIN_ROOT,
+                  auditPath: policySettings.auditPath,
+                  redaction: redactForJudgeWithProvenance(action.params),
+                }));
+                routeConsistent = samePolicyRoute(routeSnapshot, freshRoute);
+              } catch {
+                routeConsistent = false;
+              }
+              if (!routeConsistent) {
+                result = failure();
+              } else if (reviewed === undefined) {
                 result = failure('judge_unavailable');
               } else {
                 const ok = readData(reviewed, 'ok');
@@ -757,12 +1015,10 @@ export function createActionJudgePlugin(deps = {}) {
                         const safeNormalized = normalizedSnapshot(normalized, verdict);
                         if (safeNormalized) {
                           judgeResult = verdict;
-                          const envelopeParams = readData(createJudgeEnvelope(action), 'params');
-                          const envelopeTool = readData(envelope, 'tool_name');
                           result = applyLocalSafetyDowngrade(
-                            applyOpaqueDowngrade(safeNormalized, envelopeParams.value),
-                            envelopeTool.ok ? envelopeTool.value : undefined,
-                            envelopeParams.value,
+                            applyOpaqueDowngrade(safeNormalized, localVisibleParams),
+                            localToolName,
+                            localVisibleParams,
                             action,
                           );
                         }
@@ -775,6 +1031,25 @@ export function createActionJudgePlugin(deps = {}) {
               result = failure('judge_unavailable');
             }
           }
+        }
+
+        decisionSource = ordinaryDecisionSource(result, judgeResult);
+        if (safePathCandidate) safePathDisagreement = result.kind !== 'allow';
+        const shadowAssessmentFailure = routeAssessmentFailed
+          && config.enforcement === 'shadow';
+        if (hardBoundaryCandidate && (!breakerCandidate || shadowAssessmentFailure)) {
+          result = hardPolicyBlock();
+          decisionSource = 'hard_boundary';
+        }
+        if (breakerCandidate && !shadowAssessmentFailure) {
+          result = repeatedDenials();
+          decisionSource = 'circuit_breaker';
+        }
+        if (decisionStoreCheckFailed) {
+          ({ result, decisionSource } = applyTechnicalFailureMonotonically(
+            result,
+            decisionSource,
+          ));
         }
 
         if (result.kind === 'allow') {
@@ -790,28 +1065,52 @@ export function createActionJudgePlugin(deps = {}) {
               || freshHash.value !== expectedHash
               || freshParams === null) {
               result = failure();
+              decisionSource = 'failure';
             } else {
               action = freshAction;
               params = freshParams;
             }
           } catch {
             result = failure();
+            decisionSource = 'failure';
           }
         }
 
-        if (trackedIdentity !== undefined && !decisionStoreCheckFailed) {
+        if (trackedIdentity !== undefined && !decisionStoreCheckFailed
+          && !shadowAssessmentFailure) {
           try {
             if (readDecisionStoreTrip(decisionStore, trackedIdentity.runId)) {
               result = repeatedDenials();
+              decisionSource = 'circuit_breaker';
             }
           } catch {
-            result = failure();
+            ({ result, decisionSource } = applyTechnicalFailureMonotonically(
+              result,
+              decisionSource,
+            ));
             decisionStoreCheckFailed = true;
           }
         }
       } catch {
-        result = failure();
+        if (routeAssessmentFailed && config.enforcement === 'shadow') {
+          result = failure();
+          decisionSource = 'failure';
+        } else if (breakerCandidate) {
+          result = repeatedDenials();
+          decisionSource = 'circuit_breaker';
+        } else if (hardBoundaryCandidate) {
+          result = hardPolicyBlock();
+          decisionSource = 'hard_boundary';
+        } else {
+          result = failure();
+          decisionSource = 'failure';
+        }
       }
+
+      params = safeParamsAfterPrototypePollution(params);
+      mappedDecision = mapSafely(mapper, config, result, params, decisionSource);
+      result = mappedDecision.effectiveResult;
+      decisionSource = mappedDecision.effectiveDecisionSource;
 
       if (trackedIdentity !== undefined) {
         try {
@@ -820,10 +1119,29 @@ export function createActionJudgePlugin(deps = {}) {
             trackedIdentity.runId,
             decisionMetadata(trackedIdentity, result, judgeResult),
           );
-          if (recordStatus.already_tripped) result = repeatedDenials();
+          if (recordStatus.already_tripped
+            && !(routeAssessmentFailed && config.enforcement === 'shadow')
+            && decisionSource !== 'circuit_breaker') {
+            result = repeatedDenials();
+            decisionSource = 'circuit_breaker';
+          }
         } catch {
-          result = failure();
+          ({ result, decisionSource } = applyTechnicalFailureMonotonically(
+            result,
+            decisionSource,
+          ));
         }
+      }
+
+      if (result !== mappedDecision.effectiveResult
+        || decisionSource !== mappedDecision.effectiveDecisionSource) {
+        mappedDecision = mapSafely(mapper, config, result, params, decisionSource);
+        result = mappedDecision.effectiveResult;
+        decisionSource = mappedDecision.effectiveDecisionSource;
+      }
+
+      if (safePathCandidate && decisionSource !== 'circuit_breaker') {
+        safePathDisagreement = result.kind !== 'allow';
       }
 
       try {
@@ -834,9 +1152,22 @@ export function createActionJudgePlugin(deps = {}) {
           latencyMs,
           mode: config.mode,
           enforcement: config.enforcement,
+          decisionSource,
+          safePathCandidate,
+          safePathFamily,
+          safePathDisagreement,
         });
-        params = safeParamsAfterPrototypePollution(params);
-        return mapSafely(config, result, params);
+        const postAuditParams = safeParamsAfterPrototypePollution(params);
+        if (postAuditParams !== params) {
+          params = postAuditParams;
+          mappedDecision = {
+            value: safeFallbackMapping(config, result, params),
+            effectiveResult: result,
+            effectiveDecisionSource: decisionSource,
+            fellBack: mappedDecision.fellBack,
+          };
+        }
+        return mappedDecision.value;
       } catch {
         return safeFallbackMapping(config, failure(), params);
       }

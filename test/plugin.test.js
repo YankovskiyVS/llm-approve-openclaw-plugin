@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import defaultPlugin, {
   createActionJudgePlugin as createActionJudgePluginFromIndex,
 } from '../index.js';
@@ -32,6 +34,7 @@ const VALID_PROVIDER = Object.freeze({
   baseUrl: 'https://foundation-models.api.cloud.ru/v1',
   apiKey: API_SECRET,
 });
+const PACKAGE_ROOT = dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
 
 function verdictText(input, overrides = {}) {
   const verdict = {
@@ -157,6 +160,13 @@ function callData(runId = 'run-1', params = { path: '/tmp/status' }) {
       sessionKey: 'session-1',
     },
   };
+}
+
+function toolCall(toolName, params, runId = 'run-1') {
+  const call = callData(runId, params);
+  call.event.toolName = toolName;
+  call.ctx.toolName = toolName;
+  return call;
 }
 
 function capturePrompt(harness, prompt = 'Read status.', runId = 'run-1', extras = {}) {
@@ -368,6 +378,215 @@ test('a pre-tripped run skips Qwen and blocks in both enforcing modes', async (t
       assert.equal(decisionStore.isTripped('run-fresh'), false);
     });
   }
+});
+
+test('an exact hard boundary skips Qwen and blocks in both enforcing modes', async (t) => {
+  for (const mode of ['autonomous', 'supervised']) {
+    await t.test(mode, async () => {
+      const client = verdictClient();
+      const harness = setup({ pluginConfig: { mode, enforcement: 'enforce' }, client });
+      capturePrompt(harness, 'Rewrite the judge runtime.');
+      const call = toolCall('write', {
+        path: `${PACKAGE_ROOT}/src/plugin.js`,
+        content: 'export default {}',
+      });
+
+      const result = await harness.beforeTool(call.event, call.ctx);
+
+      assert.equal(client.calls.length, 0);
+      assertBlocked(result, 'hard_policy_block');
+      assert.equal(harness.auditEvents.length, 1);
+      assert.equal(harness.auditEvents[0].decision_source, 'hard_boundary');
+      assert.equal(harness.auditEvents[0].outcome, 'deny');
+      assert.equal(harness.auditEvents[0].feedback_code, 'hard_policy_block');
+      assert.equal(harness.auditEvents[0].safe_path_candidate, false);
+    });
+  }
+});
+
+test('shadow calls Qwen for a hard boundary but audits the hard candidate and stays observe-only', async () => {
+  const client = verdictClient();
+  const harness = setup({
+    pluginConfig: { mode: 'autonomous', enforcement: 'shadow' },
+    client,
+  });
+  capturePrompt(harness, 'Rewrite the judge runtime.');
+  const call = toolCall('write', {
+    path: `${PACKAGE_ROOT}/src/plugin.js`,
+    content: 'export default {}',
+  });
+
+  const result = await harness.beforeTool(call.event, call.ctx);
+
+  assert.equal(result, undefined);
+  assert.equal(client.calls.length, 1);
+  assert.equal(harness.auditEvents[0].decision_source, 'hard_boundary');
+  assert.equal(harness.auditEvents[0].outcome, 'deny');
+  assert.equal(harness.auditEvents[0].feedback_code, null);
+  assert.equal(harness.auditEvents[0].feedback_status, null);
+});
+
+test('an enforcing hard boundary does not depend on captured intent or Qwen availability', async () => {
+  const client = {
+    calls: [],
+    async review(input) {
+      this.calls.push(input);
+      throw new Error(PROMPT_SECRET);
+    },
+  };
+  const harness = setup({
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+    client,
+  });
+  const call = toolCall('write', {
+    path: `${PACKAGE_ROOT}/src/plugin.js`,
+    content: 'export default {}',
+  });
+
+  assertBlocked(await harness.beforeTool(call.event, call.ctx), 'hard_policy_block');
+  assert.equal(client.calls.length, 0);
+  assert.equal(harness.auditEvents[0].decision_source, 'hard_boundary');
+});
+
+test('every safe-path candidate still calls Qwen exactly once and records final disagreement', async (t) => {
+  const cases = [
+    ['session allow', 'session_status', {}, verdictClient(), false],
+    [
+      'browser deny',
+      'browser',
+      { action: 'act', target: 'sandbox', request: { kind: 'wait', timeMs: 100 } },
+      verdictClient({
+        decision: 'deny',
+        risk: 'high',
+        authorization: 'low',
+        reason_code: 'out_of_scope',
+      }),
+      true,
+    ],
+  ];
+  for (const [name, toolName, params, client, disagreement] of cases) {
+    await t.test(name, async () => {
+      const harness = setup({
+        pluginConfig: { mode: 'autonomous', enforcement: 'shadow' },
+        client,
+      });
+      capturePrompt(harness, 'Inspect current status.');
+      const call = toolCall(toolName, params);
+
+      assert.equal(await harness.beforeTool(call.event, call.ctx), undefined);
+      assert.equal(client.calls.length, 1);
+      assert.equal(harness.auditEvents[0].safe_path_candidate, true);
+      assert.equal(
+        harness.auditEvents[0].safe_path_family,
+        toolName === 'session_status' ? 'session_status_current' : 'browser_wait',
+      );
+      assert.equal(harness.auditEvents[0].safe_path_disagreement, disagreement);
+      assert.equal(harness.auditEvents[0].decision_source, 'llm');
+    });
+  }
+});
+
+test('safe candidates call Qwen exactly once in both enforcing modes', async (t) => {
+  for (const mode of ['autonomous', 'supervised']) {
+    await t.test(mode, async () => {
+      const client = verdictClient();
+      const harness = setup({ pluginConfig: { mode, enforcement: 'enforce' }, client });
+      capturePrompt(harness, 'Inspect current status.');
+      const call = toolCall('session_status', {});
+
+      assert.deepEqual(await harness.beforeTool(call.event, call.ctx), { params: {} });
+      assert.equal(client.calls.length, 1);
+      assert.equal(harness.auditEvents[0].safe_path_candidate, true);
+      assert.equal(harness.auditEvents[0].safe_path_disagreement, false);
+      assert.equal(harness.auditEvents[0].decision_source, 'llm');
+    });
+  }
+});
+
+test('safe candidate disagreement observes the post-normalization local downgrade', async () => {
+  const client = verdictClient({ confidence: 0.7 });
+  const harness = setup({
+    pluginConfig: { mode: 'autonomous', enforcement: 'shadow' },
+    client,
+  });
+  capturePrompt(harness, 'Inspect current status.');
+  const call = toolCall('session_status', {});
+
+  assert.equal(await harness.beforeTool(call.event, call.ctx), undefined);
+  assert.equal(client.calls.length, 1);
+  assert.equal(harness.auditEvents[0].decision, 'allow');
+  assert.equal(harness.auditEvents[0].outcome, 'review');
+  assert.equal(harness.auditEvents[0].decision_source, 'local_downgrade');
+  assert.equal(harness.auditEvents[0].safe_path_candidate, true);
+  assert.equal(harness.auditEvents[0].safe_path_disagreement, true);
+});
+
+test('pre-tripped shadow run still measures a safe candidate before circuit-breaker override', async () => {
+  const decisionStore = runDecisionStore();
+  tripDecisionStore(decisionStore, 'run-shadow-tripped');
+  const client = verdictClient();
+  const harness = setup({
+    pluginConfig: { mode: 'autonomous', enforcement: 'shadow' },
+    client,
+    deps: { decisionStore },
+  });
+  capturePrompt(harness, 'Inspect current status.', 'run-shadow-tripped');
+  const call = toolCall('session_status', {}, 'run-shadow-tripped');
+
+  assert.equal(await harness.beforeTool(call.event, call.ctx), undefined);
+  assert.equal(client.calls.length, 1);
+  assert.equal(harness.auditEvents[0].decision_source, 'circuit_breaker');
+  assert.equal(harness.auditEvents[0].outcome, 'deny');
+  assert.equal(harness.auditEvents[0].safe_path_candidate, true);
+  assert.equal(harness.auditEvents[0].safe_path_family, 'session_status_current');
+  assert.equal(harness.auditEvents[0].safe_path_disagreement, false);
+});
+
+test('untrusted routing assessment fails closed without invoking Qwen', async () => {
+  const client = verdictClient();
+  const harness = setup({
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+    client,
+    deps: {
+      assessPolicyRoute() {
+        throw new Error(PROMPT_SECRET);
+      },
+    },
+  });
+  capturePrompt(harness, 'Inspect current status.');
+  const call = toolCall('session_status', {});
+
+  assertBlocked(await harness.beforeTool(call.event, call.ctx), 'invalid_judge_response');
+  assert.equal(client.calls.length, 0);
+  assert.equal(harness.auditEvents[0].decision_source, 'failure');
+  assert.equal(harness.auditEvents[0].outcome, 'failure');
+  assert.equal(harness.auditEvents[0].safe_path_candidate, false);
+  assert.equal(JSON.stringify(harness.auditEvents[0]).includes(PROMPT_SECRET), false);
+});
+
+test('a pre-tripped shadow call audits an assessor failure instead of circuit-breaker deny', async () => {
+  const decisionStore = runDecisionStore();
+  tripDecisionStore(decisionStore, 'run-shadow-assessor-failure');
+  const client = verdictClient();
+  const harness = setup({
+    pluginConfig: { mode: 'autonomous', enforcement: 'shadow' },
+    client,
+    deps: {
+      decisionStore,
+      assessPolicyRoute() {
+        throw new Error(PROMPT_SECRET);
+      },
+    },
+  });
+  capturePrompt(harness, 'Inspect current status.', 'run-shadow-assessor-failure');
+  const call = toolCall('session_status', {}, 'run-shadow-assessor-failure');
+
+  assert.equal(await harness.beforeTool(call.event, call.ctx), undefined);
+  assert.equal(client.calls.length, 0);
+  assert.equal(harness.auditEvents.length, 1);
+  assert.equal(harness.auditEvents[0].decision_source, 'failure');
+  assert.equal(harness.auditEvents[0].outcome, 'failure');
+  assert.equal(harness.auditEvents[0].feedback_code, null);
 });
 
 test('a pre-tripped trusted run blocks before malformed params are serialized', async (t) => {
@@ -584,6 +803,135 @@ test('trusted calls record exactly once before audit and a new run stays indepen
   });
 });
 
+test('audit records the effective failure when the final mapper falls back', async () => {
+  const decisionStore = runDecisionStore();
+  const harness = setup({
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+    deps: {
+      decisionStore,
+      mapVerdict() {
+        throw new Error(PROMPT_SECRET);
+      },
+    },
+  });
+  capturePrompt(harness);
+  const call = callData();
+
+  const result = await harness.beforeTool(call.event, call.ctx);
+
+  assertBlocked(result, 'invalid_judge_response');
+  assert.equal(harness.auditEvents.length, 1);
+  assert.equal(harness.auditEvents[0].decision_source, 'failure');
+  assert.equal(harness.auditEvents[0].outcome, 'failure');
+  assert.equal(harness.auditEvents[0].feedback_code, 'invalid_judge_response');
+  const snapshot = decisionStore.snapshot('run-1');
+  assert.equal(snapshot.length, 1);
+  assert.equal(snapshot[0].outcome, 'failure');
+  assert.equal(snapshot[0].reason_code, 'invalid_judge_response');
+});
+
+test('mapper failure preserves hard, breaker, and explicit deny in both enforcing modes', async (t) => {
+  for (const mode of ['autonomous', 'supervised']) {
+    await t.test(`${mode}: hard boundary`, async () => {
+      const decisionStore = runDecisionStore();
+      const client = verdictClient();
+      let mapperCalls = 0;
+      const harness = setup({
+        client,
+        pluginConfig: { mode, enforcement: 'enforce' },
+        deps: {
+          decisionStore,
+          mapVerdict() {
+            mapperCalls += 1;
+            throw new Error(PROMPT_SECRET);
+          },
+        },
+      });
+      capturePrompt(harness, 'Rewrite the judge runtime.', `run-hard-${mode}`);
+      const call = toolCall('write', {
+        path: `${PACKAGE_ROOT}/src/plugin.js`,
+        content: 'export default {}',
+      }, `run-hard-${mode}`);
+
+      assertBlocked(await harness.beforeTool(call.event, call.ctx), 'hard_policy_block');
+      assert.equal(client.calls.length, 0);
+      assert.equal(mapperCalls, 1);
+      const snapshot = decisionStore.snapshot(`run-hard-${mode}`);
+      assert.equal(snapshot.length, 1);
+      assert.equal(snapshot[0].outcome, 'deny');
+      assert.equal(snapshot[0].reason_code, 'hard_policy_block');
+      assert.equal(harness.auditEvents[0].decision_source, 'hard_boundary');
+      assert.equal(harness.auditEvents[0].outcome, 'deny');
+    });
+
+    await t.test(`${mode}: circuit breaker`, async () => {
+      const runId = `run-breaker-${mode}`;
+      const decisionStore = runDecisionStore();
+      tripDecisionStore(decisionStore, runId);
+      const client = verdictClient();
+      let mapperCalls = 0;
+      const harness = setup({
+        client,
+        pluginConfig: { mode, enforcement: 'enforce' },
+        deps: {
+          decisionStore,
+          mapVerdict() {
+            mapperCalls += 1;
+            throw new Error(PROMPT_SECRET);
+          },
+        },
+      });
+      capturePrompt(harness, 'Read status.', runId);
+      const call = callData(runId);
+
+      assertBlocked(await harness.beforeTool(call.event, call.ctx), 'repeated_denials');
+      assert.equal(client.calls.length, 0);
+      assert.equal(mapperCalls, 1);
+      const snapshot = decisionStore.snapshot(runId);
+      assert.equal(snapshot.length, 4);
+      assert.equal(snapshot[3].outcome, 'deny');
+      assert.equal(snapshot[3].reason_code, 'repeated_denials');
+      assert.equal(harness.auditEvents[0].decision_source, 'circuit_breaker');
+      assert.equal(harness.auditEvents[0].outcome, 'deny');
+    });
+
+    await t.test(`${mode}: explicit LLM deny`, async () => {
+      const runId = `run-deny-${mode}`;
+      const decisionStore = runDecisionStore();
+      const client = verdictClient({
+        decision: 'deny',
+        risk: 'high',
+        authorization: 'low',
+        reason_code: 'out_of_scope',
+      });
+      let mapperCalls = 0;
+      const harness = setup({
+        client,
+        pluginConfig: { mode, enforcement: 'enforce' },
+        deps: {
+          decisionStore,
+          mapVerdict() {
+            mapperCalls += 1;
+            throw new Error(PROMPT_SECRET);
+          },
+        },
+      });
+      capturePrompt(harness, 'Read status.', runId);
+      const call = callData(runId);
+
+      assertBlocked(await harness.beforeTool(call.event, call.ctx), 'out_of_scope');
+      assert.equal(client.calls.length, 1);
+      assert.equal(mapperCalls, 1);
+      const snapshot = decisionStore.snapshot(runId);
+      assert.equal(snapshot.length, 1);
+      assert.equal(snapshot[0].outcome, 'deny');
+      assert.equal(snapshot[0].reason_code, 'out_of_scope');
+      assert.equal(harness.auditEvents[0].decision_source, 'llm');
+      assert.equal(harness.auditEvents[0].outcome, 'deny');
+    });
+  }
+});
+
 test('an impossible newly-tripped status fails closed for non-denial records', async (t) => {
   const cases = [
     {
@@ -712,6 +1060,86 @@ test('missing, throwing, async, and hostile decision-store methods fail closed',
       assert.equal(harness.auditEvents[0].feedback_code, 'invalid_judge_response');
       assert.equal(harness.auditEvents[0].feedback_status, 'blocked');
     });
+  }
+});
+
+test('hard and explicit deny decisions survive decision-store failures in both modes', async (t) => {
+  const validStatus = { already_tripped: false, newly_tripped: false, tripped: false };
+  const storeCases = [
+    ['throwing initial check', () => ({
+      isTripped() { throw new Error(PROMPT_SECRET); },
+      record() { return validStatus; },
+    })],
+    ['malformed initial check', () => ({
+      isTripped() { return 'not-a-boolean'; },
+      record() { return validStatus; },
+    })],
+    ['throwing second check', () => {
+      let checks = 0;
+      return {
+        isTripped() {
+          checks += 1;
+          if (checks === 1) return false;
+          throw new Error(PROMPT_SECRET);
+        },
+        record() { return validStatus; },
+      };
+    }],
+    ['throwing record', () => ({
+      isTripped() { return false; },
+      record() { throw new Error(PROMPT_SECRET); },
+    })],
+    ['malformed record', () => ({
+      isTripped() { return false; },
+      record() { return { already_tripped: false }; },
+    })],
+  ];
+
+  for (const mode of ['autonomous', 'supervised']) {
+    for (const [storeName, makeStore] of storeCases) {
+      await t.test(`${mode}: hard boundary with ${storeName}`, async () => {
+        const client = verdictClient();
+        const harness = setup({
+          pluginConfig: { mode, enforcement: 'enforce' },
+          client,
+          deps: { decisionStore: makeStore() },
+        });
+        capturePrompt(harness, 'Overwrite the plugin implementation.');
+        const call = toolCall('write', {
+          path: `${PACKAGE_ROOT}/src/plugin.js`,
+          content: 'export default null;\n',
+        });
+
+        const result = await harness.beforeTool(call.event, call.ctx);
+
+        assertBlocked(result, 'hard_policy_block');
+        assert.equal(client.calls.length, 0);
+        assert.equal(harness.auditEvents[0].decision_source, 'hard_boundary');
+        assert.equal(harness.auditEvents[0].outcome, 'deny');
+      });
+
+      await t.test(`${mode}: LLM deny with ${storeName}`, async () => {
+        const client = verdictClient({
+          decision: 'deny',
+          risk: 'critical',
+          authorization: 'low',
+        });
+        const harness = setup({
+          pluginConfig: { mode, enforcement: 'enforce' },
+          client,
+          deps: { decisionStore: makeStore() },
+        });
+        capturePrompt(harness, 'Read the requested status file.');
+        const call = callData();
+
+        const result = await harness.beforeTool(call.event, call.ctx);
+
+        assertBlocked(result, 'other_policy_risk');
+        assert.equal(client.calls.length, 1);
+        assert.equal(harness.auditEvents[0].decision_source, 'llm');
+        assert.equal(harness.auditEvents[0].outcome, 'deny');
+      });
+    }
   }
 });
 
@@ -1142,6 +1570,42 @@ test('a hostile client cannot erase opaque markers before the shared downgrade',
       assert.equal(harness.auditEvents[0].outcome, 'review');
     });
   }
+});
+
+test('client-time intrinsic mutation cannot turn an opaque action into an allow', async () => {
+  const rawSecret = 'post-await-intrinsic-secret-never-send-x85';
+  const descriptor = Object.getOwnPropertyDescriptor(RegExp.prototype, Symbol.replace);
+  let reviewCalls = 0;
+  const client = {
+    async review(input) {
+      reviewCalls += 1;
+      Object.defineProperty(RegExp.prototype, Symbol.replace, {
+        ...descriptor,
+        value() { return ''; },
+      });
+      return { ok: true, text: verdictText(input), latencyMs: 7 };
+    },
+  };
+  const harness = setup({
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+    client,
+  });
+  capturePrompt(harness, 'Read the requested status file.');
+  const call = callData('run-1', {
+    path: '/tmp/status',
+    apiToken: rawSecret,
+  });
+
+  let result;
+  try {
+    result = await harness.beforeTool(call.event, call.ctx);
+  } finally {
+    Object.defineProperty(RegExp.prototype, Symbol.replace, descriptor);
+  }
+
+  assertBlocked(result, 'invalid_judge_response');
+  assert.equal(reviewCalls, 1);
+  assert.equal(JSON.stringify(harness.auditEvents).includes(rawSecret), false);
 });
 
 test('Object.prototype pollution cannot turn inherited runtime fields into an approved call', async () => {
@@ -1693,7 +2157,7 @@ test('supervised review, client failures, and missing provider return classified
     ['client invalid response', { async review() { return { ok: false, reason: 'invalid judge response', latencyMs: 4 }; } }, {}, 1, 'invalid_judge_response'],
     ['client invalid request', { async review() { return { ok: false, reason: 'invalid judge request', latencyMs: 4 }; } }, {}, 1, 'invalid_judge_response'],
     ['parser error', { async review() { return { ok: true, text: 'not json', latencyMs: 4 }; } }, {}, 1, 'invalid_judge_response'],
-    ['missing provider', NO_INJECTION, { providerConfig: NO_PROVIDER }, 0, 'judge_unavailable'],
+    ['missing provider', NO_INJECTION, { providerConfig: NO_PROVIDER }, 1, 'judge_unavailable'],
   ];
 
   for (const [name, client, options, expectedAuditEvents, expectedCode] of cases) {
@@ -1837,8 +2301,53 @@ test('invalid ENV keeps both hooks but ignores injected allow and requires appro
   assert.equal(harness.registrations.length, 2);
   assert.equal(client.calls.length, 0);
   assertApproval(result, call.event.params, 'judge_unavailable');
-  assert.equal(harness.auditEvents.length, 0);
+  assert.equal(harness.auditEvents.length, 1);
+  assert.equal(harness.auditEvents[0].enforcement, 'enforce');
+  assert.equal(harness.auditEvents[0].decision_source, 'failure');
+  assert.equal(harness.auditEvents[0].outcome, 'failure');
   assert.deepEqual(harness.logs, ['LLM action judge setup failed']);
+});
+
+test('runtime-only ENV failure cannot preserve a shadow profile or bypass hard routing', async (t) => {
+  const invalidEnvironments = [
+    { OPENCLAW_JUDGE_PROFILE: 'shadow', OPENCLAW_JUDGE_MODEL: API_SECRET },
+    { OPENCLAW_JUDGE_PROFILE: 'shadow', OPENCLAW_JUDGE_API_KEY: '' },
+    {
+      OPENCLAW_JUDGE_PROFILE: 'shadow',
+      OPENCLAW_JUDGE_API_KEY: API_SECRET,
+      OPENCLAW_JUDGE_BASE_URL: 'https://attacker.invalid/v1',
+    },
+  ];
+
+  for (const [index, environment] of invalidEnvironments.entries()) {
+    await t.test(String(index), async () => {
+      const client = verdictClient();
+      const harness = setup({ environment, client });
+      assert.equal(harness.registrations.length, 2);
+      capturePrompt(harness);
+
+      const ordinary = callData(`run-invalid-ordinary-${index}`);
+      assertApproval(
+        await harness.beforeTool(ordinary.event, ordinary.ctx),
+        ordinary.event.params,
+        'judge_unavailable',
+      );
+
+      const hard = toolCall('write', {
+        path: `${PACKAGE_ROOT}/src/plugin.js`,
+        content: 'export default {}',
+      }, `run-invalid-hard-${index}`);
+      assertBlocked(await harness.beforeTool(hard.event, hard.ctx), 'hard_policy_block');
+      assert.equal(client.calls.length, 0);
+      assert.deepEqual(
+        harness.auditEvents.map((event) => [event.enforcement, event.decision_source, event.outcome]),
+        [
+          ['enforce', 'failure', 'failure'],
+          ['enforce', 'hard_boundary', 'deny'],
+        ],
+      );
+    });
+  }
 });
 
 test('environment is snapshotted once during registration', async () => {
@@ -1954,8 +2463,8 @@ test('uses api.config.models.providers.cloudru with the default timeout', () => 
 
 test('missing, invalid, and throwing Cloud.ru client configuration still registers and fails safely', async (t) => {
   const cases = [
-    ['missing', { providerConfig: NO_PROVIDER }, 0],
-    ['invalid', { providerConfig: { baseUrl: '', apiKey: API_SECRET } }, 0],
+    ['missing', { providerConfig: NO_PROVIDER }, 1],
+    ['invalid', { providerConfig: { baseUrl: '', apiKey: API_SECRET } }, 1],
     ['factory throw', {
       providerConfig: VALID_PROVIDER,
       deps: { createJudgeClient() { throw new Error(API_SECRET); } },
@@ -1975,6 +2484,72 @@ test('missing, invalid, and throwing Cloud.ru client configuration still registe
       assert.equal(harness.auditEvents.length, expectedAuditEvents);
     });
   }
+});
+
+test('hard routing blocks without a valid Qwen provider in both enforcing modes', async (t) => {
+  const providerCases = [
+    ['missing provider', { providerConfig: NO_PROVIDER }],
+    ['invalid provider', { providerConfig: { baseUrl: '', apiKey: API_SECRET } }],
+    ['invalid API env', {
+      environment: { OPENCLAW_JUDGE_API_KEY: 'invalid key with spaces' },
+    }],
+    ['invalid base URL env', {
+      environment: { OPENCLAW_JUDGE_BASE_URL: 'https://attacker.invalid/v1' },
+    }],
+    ['invalid profile env', {
+      environment: { OPENCLAW_JUDGE_PROFILE: 'invalid-profile' },
+    }],
+    ['invalid audit env', {
+      environment: { OPENCLAW_JUDGE_AUDIT_PATH: '../judge.jsonl' },
+    }],
+    ['unknown judge env', {
+      environment: { OPENCLAW_JUDGE_UNKNOWN: 'invalid' },
+    }],
+  ];
+
+  for (const mode of ['autonomous', 'supervised']) {
+    for (const [providerName, options] of providerCases) {
+      await t.test(`${mode}: ${providerName}`, async () => {
+        const client = verdictClient();
+        const harness = setup({
+          ...options,
+          pluginConfig: { mode, enforcement: 'enforce' },
+          client,
+        });
+        capturePrompt(harness, 'Overwrite the plugin implementation.');
+        const call = toolCall('write', {
+          path: `${PACKAGE_ROOT}/src/plugin.js`,
+          content: 'export default null;\n',
+        });
+
+        const result = await harness.beforeTool(call.event, call.ctx);
+
+        assertBlocked(result, 'hard_policy_block');
+        assert.equal(client.calls.length, 0);
+        assert.equal(harness.auditEvents.length, 1);
+        assert.equal(harness.auditEvents[0].decision_source, 'hard_boundary');
+        assert.equal(harness.auditEvents[0].outcome, 'deny');
+      });
+    }
+  }
+});
+
+test('hard routing uses fail-closed defaults when plugin config is invalid', async () => {
+  const client = verdictClient();
+  const harness = setup({
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce', extra: true },
+    client,
+  });
+  capturePrompt(harness, 'Overwrite the plugin implementation.');
+  const call = toolCall('write', {
+    path: `${PACKAGE_ROOT}/src/plugin.js`,
+    content: 'export default null;\n',
+  });
+
+  assertBlocked(await harness.beforeTool(call.event, call.ctx), 'hard_policy_block');
+  assert.equal(client.calls.length, 0);
+  assert.equal(harness.auditEvents[0].decision_source, 'hard_boundary');
+  assert.equal(harness.auditEvents[0].outcome, 'deny');
 });
 
 test('pre-existing run, tool call, or tool name conflicts fail before the client', async (t) => {
@@ -2200,7 +2775,10 @@ test('store/decision/audit factory failures use safe fallbacks without escaping 
       await harness.beforeTool(call.event, call.ctx),
       'invalid_judge_response',
     );
-    assert.equal(client.calls.length, 0);
+    assert.equal(client.calls.length, 1);
+    assert.equal(harness.auditEvents.length, 1);
+    assert.equal(harness.auditEvents[0].decision_source, 'failure');
+    assert.equal(harness.auditEvents[0].outcome, 'failure');
   });
 
   await t.test('audit factory failure does not change allow', async () => {

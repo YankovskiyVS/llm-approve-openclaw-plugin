@@ -21,6 +21,11 @@ const ENV_NAMES = Object.freeze({
   logLevel: 'OPENCLAW_JUDGE_LOG_LEVEL',
 });
 const ALLOWED_JUDGE_NAMES = new Set(Object.values(ENV_NAMES));
+const POLICY_ENV_NAMES = new Set([
+  ENV_NAMES.profile,
+  ENV_NAMES.auditPath,
+  STATE_DIR_NAME,
+]);
 const PROFILE_CONFIG = Object.freeze({
   shadow: Object.freeze({ mode: 'autonomous', enforcement: 'shadow' }),
   supervised: Object.freeze({ mode: 'supervised', enforcement: 'enforce' }),
@@ -55,6 +60,19 @@ function snapshotEnvironment(environment) {
       return invalidConfiguration();
     }
     if (!ALLOWED_JUDGE_NAMES.has(name) && name !== STATE_DIR_NAME) continue;
+    const field = ownDataValue(environment, name);
+    if (!field.present || typeof field.value !== 'string') return invalidConfiguration();
+    snapshot[name] = field.value;
+  }
+  return Object.freeze(snapshot);
+}
+
+function snapshotPolicyEnvironment(environment) {
+  if (!isObject(environment) || types.isProxy(environment)) return invalidConfiguration();
+  if (Object.getOwnPropertySymbols(environment).length !== 0) return invalidConfiguration();
+  const snapshot = Object.create(null);
+  for (const name of Object.getOwnPropertyNames(environment)) {
+    if (!POLICY_ENV_NAMES.has(name)) continue;
     const field = ownDataValue(environment, name);
     if (!field.present || typeof field.value !== 'string') return invalidConfiguration();
     snapshot[name] = field.value;
@@ -176,6 +194,36 @@ function resolveProvider(environment, getSharedProvider) {
     providerConfig: providerSnapshot(getSharedProvider()),
     credentialSource: 'shared-provider',
   });
+}
+
+export function resolvePolicySettings(options = {}) {
+  try {
+    if (!isObject(options) || types.isProxy(options)
+      || Object.getOwnPropertySymbols(options).length !== 0) return invalidConfiguration();
+    const environmentField = ownDataValue(options, 'environment');
+    const pluginConfigField = ownDataValue(options, 'pluginConfig');
+    const homeField = ownDataValue(options, 'homeDirectory');
+    const environment = snapshotPolicyEnvironment(
+      environmentField.present ? environmentField.value : process.env,
+    );
+    const legacyConfig = validatedPluginConfig(
+      pluginConfigField.present ? pluginConfigField.value : undefined,
+    );
+    const profile = explicitValue(environment, ENV_NAMES.profile);
+    const config = profile === undefined
+      ? legacyConfig
+      : (Object.hasOwn(PROFILE_CONFIG, profile) ? PROFILE_CONFIG[profile] : undefined);
+    if (config === undefined) return invalidConfiguration();
+    const homeDirectory = homeField.present ? homeField.value : os.homedir();
+    const audit = resolveAudit(environment, homeDirectory);
+    return Object.freeze({
+      config: Object.freeze({ mode: config.mode, enforcement: config.enforcement }),
+      auditPath: audit.auditPath,
+      auditRoot: audit.auditRoot,
+    });
+  } catch {
+    return invalidConfiguration();
+  }
 }
 
 export function resolveRuntimeSettings(options = {}) {

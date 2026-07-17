@@ -21,6 +21,7 @@ if (!packageRoot || !stateDir) {
   assert.equal(POLICY_VERSION, '2026-07-16.1');
   const auditPath = path.join(stateDir, 'logs', 'integration.jsonl');
   const fixtureKey = 'runtime-smoke-key-v041';
+  const forbiddenModelOverride = 'forbidden-override';
   const rawPrompt = 'runtime smoke trusted prompt';
 
   function makeHarness({ profile, client, extraEnvironment = {} }) {
@@ -145,7 +146,7 @@ if (!packageRoot || !stateDir) {
   const invalidHarness = makeHarness({
     profile: 'shadow',
     client: ignoredClient,
-    extraEnvironment: { OPENCLAW_JUDGE_MODEL: 'forbidden-override' },
+    extraEnvironment: { OPENCLAW_JUDGE_MODEL: forbiddenModelOverride },
   });
   const invalid = await invoke(invalidHarness, {
     runId: 'invalid-run',
@@ -176,10 +177,28 @@ if (!packageRoot || !stateDir) {
     fs.stat(auditPath),
   ]);
   const lines = audit.trimEnd().split('\n').map((line) => JSON.parse(line));
-  assert.equal(lines.length, 4);
+  assert.equal(lines.length, 5);
+  const invalidEnvironmentEvent = lines[4];
+  assert.equal(invalidEnvironmentEvent.tool_name, 'read');
+  assert.equal(invalidEnvironmentEvent.mode, 'supervised');
+  assert.equal(invalidEnvironmentEvent.enforcement, 'enforce');
+  assert.equal(invalidEnvironmentEvent.decision_source, 'failure');
+  assert.equal(invalidEnvironmentEvent.outcome, 'failure');
+  assert.equal(invalidEnvironmentEvent.feedback_code, 'judge_unavailable');
+  assert.equal(invalidEnvironmentEvent.feedback_status, 'approval_required');
+  assert.equal(invalidEnvironmentEvent.decision, null);
+  assert.equal(invalidEnvironmentEvent.risk, null);
+  assert.equal(invalidEnvironmentEvent.authorization, null);
+  assert.equal(invalidEnvironmentEvent.safe_path_candidate, false);
+  assert.equal(invalidEnvironmentEvent.safe_path_family, null);
+  assert.equal(invalidEnvironmentEvent.safe_path_disagreement, null);
+  assert.equal(Object.hasOwn(invalidEnvironmentEvent, 'prompt'), false);
+  assert.equal(Object.hasOwn(invalidEnvironmentEvent, 'params'), false);
   assert.equal(stats.mode & 0o777, 0o600);
   assert.equal(audit.includes(fixtureKey), false);
+  assert.equal(audit.includes(forbiddenModelOverride), false);
   assert.equal(audit.includes(rawPrompt), false);
+  assert.equal(audit.includes('/workspace/status.txt'), false);
   assert.equal(audit.includes('.github/workflows/deploy.yml'), false);
 
   process.stdout.write(`${JSON.stringify({

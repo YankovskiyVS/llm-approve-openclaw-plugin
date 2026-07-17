@@ -1,8 +1,174 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSecretBearingKey, redactForJudge } from '../src/redact.js';
+import {
+  isSecretBearingKey,
+  redactForJudge,
+  redactForJudgeWithProvenance,
+} from '../src/redact.js';
 
 const REDACTED = '[REDACTED]';
+
+test('returns frozen boolean-only provenance without changing redacted bytes', () => {
+  const secret = 'api_token=provenance-fixture-never-send-1b2';
+  const input = {
+    nested: { payload: secret },
+    long: 'x'.repeat(5_000),
+  };
+  const result = redactForJudgeWithProvenance(input);
+
+  assert.deepEqual(result.value, redactForJudge(input));
+  assert.deepEqual(Object.keys(result), ['value', 'secret_redacted', 'truncated', 'opaque']);
+  assert.equal(result.secret_redacted, true);
+  assert.equal(result.truncated, true);
+  assert.equal(result.opaque, true);
+  assert.equal(Object.isFrozen(result), true);
+  assert.equal(JSON.stringify(result).includes(secret), false);
+});
+
+test('distinguishes a pre-existing marker from newly detected secret provenance', () => {
+  for (const message of [
+    '[REDACTED]',
+    'api_token=[REDACTED]',
+    'Bearer [REDACTED]',
+    'Bearer [TRUNCATED]',
+    'Bearer [REDACTED PRIVATE KEY]',
+    '[TRUNCATED]',
+  ]) {
+    const literal = redactForJudgeWithProvenance({ message });
+    assert.equal(literal.secret_redacted, false, message);
+    assert.equal(literal.truncated, false, message);
+    assert.equal(literal.opaque, true, message);
+  }
+
+  const secret = redactForJudgeWithProvenance({ message: 'Bearer actual-fixture-token-3d4' });
+  assert.equal(secret.secret_redacted, true);
+  assert.equal(secret.truncated, false);
+  assert.equal(secret.opaque, true);
+
+  const secretBeforeMarker = redactForJudgeWithProvenance({
+    message: 'Bearer actual-fixture-token-3d4 [TRUNCATED]',
+  });
+  assert.equal(secretBeforeMarker.secret_redacted, true);
+  assert.equal(secretBeforeMarker.opaque, true);
+});
+
+test('tracks nested secret and truncation provenance idempotently without values or paths', () => {
+  const first = redactForJudgeWithProvenance({
+    items: [{ password: 'nested-provenance-fixture-4e5' }],
+    note: 'z'.repeat(4_097),
+  });
+  const second = redactForJudgeWithProvenance(first.value);
+
+  assert.equal(first.secret_redacted, true);
+  assert.equal(first.truncated, true);
+  assert.equal(first.opaque, true);
+  assert.equal(second.secret_redacted, false);
+  assert.equal(second.truncated, false);
+  assert.equal(second.opaque, true);
+  assert.deepEqual(second.value, first.value);
+  assert.deepEqual(Object.keys(first), ['value', 'secret_redacted', 'truncated', 'opaque']);
+});
+
+test('provenance preserves generic redaction errors for proxy, accessor and cycle inputs', () => {
+  let getterCalls = 0;
+  const accessor = {};
+  Object.defineProperty(accessor, 'password', {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return 'accessor-secret-never-read';
+    },
+  });
+  const proxy = new Proxy({}, {
+    ownKeys() { throw new Error('proxy-secret-never-leak'); },
+  });
+  const cycle = {};
+  cycle.self = cycle;
+
+  for (const value of [accessor, proxy, cycle]) {
+    assert.throws(
+      () => redactForJudgeWithProvenance(value),
+      (error) => error instanceof TypeError
+        && /^cannot redact (?:unsupported|cyclic) value$/u.test(error.message)
+        && !error.message.includes('secret-never'),
+    );
+  }
+  assert.equal(getterCalls, 0);
+});
+
+test('provenance fails closed for inherited fields or runtime prototype mutation', () => {
+  const inherited = Object.create({ api_token: 'prototype-secret-never-read' });
+  inherited.visible = 'safe';
+  assert.throws(
+    () => redactForJudgeWithProvenance(inherited),
+    (error) => error instanceof TypeError && error.message === 'cannot redact unsupported value',
+  );
+
+  const descriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'pollutedSecret');
+  Object.defineProperty(Object.prototype, 'pollutedSecret', {
+    configurable: true,
+    enumerable: true,
+    value: 'prototype-secret-never-read',
+  });
+  try {
+    assert.throws(
+      () => redactForJudgeWithProvenance({ visible: 'safe' }),
+      (error) => error instanceof TypeError && error.message === 'cannot redact unsupported value',
+    );
+  } finally {
+    if (descriptor) Object.defineProperty(Object.prototype, 'pollutedSecret', descriptor);
+    else delete Object.prototype.pollutedSecret;
+  }
+});
+
+test('provenance fails closed when mutable collection or string intrinsics are replaced', () => {
+  const cases = [
+    [Set.prototype, 'has', () => false],
+    [Array.prototype, 'some', () => false],
+    [String.prototype, 'includes', () => false],
+    [RegExp.prototype, 'test', () => false],
+  ];
+
+  for (const [owner, key, replacement] of cases) {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+    Object.defineProperty(owner, key, { ...descriptor, value: replacement });
+    try {
+      assert.throws(
+        () => redactForJudgeWithProvenance({ message: 'api_token=must-not-upgrade' }),
+        (error) => error instanceof TypeError && error.message === 'cannot redact unsupported value',
+        `${owner.constructor.name}.${key}`,
+      );
+    } finally {
+      Object.defineProperty(owner, key, descriptor);
+    }
+  }
+});
+
+test('provenance fails closed when Boolean or symbol dispatch intrinsics are replaced', () => {
+  const rawSecret = 'symbol-dispatch-secret-never-send-w74';
+  const cases = [
+    [globalThis, 'Boolean', () => true],
+    [Set.prototype, Symbol.iterator, function* hostileIterator() {}],
+    [RegExp.prototype, Symbol.replace, () => 'safe'],
+    [RegExp.prototype, Symbol.split, () => ['safe']],
+  ];
+
+  for (const [owner, key, replacement] of cases) {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+    Object.defineProperty(owner, key, { ...descriptor, value: replacement });
+    try {
+      assert.throws(
+        () => redactForJudgeWithProvenance({ apiToken: rawSecret }),
+        (error) => error instanceof TypeError
+          && error.message === 'cannot redact unsupported value'
+          && !String(error).includes(rawSecret),
+        String(key),
+      );
+    } finally {
+      Object.defineProperty(owner, key, descriptor);
+    }
+  }
+});
 
 test('classifies secret-bearing config keys without metadata false positives', () => {
   for (const key of [

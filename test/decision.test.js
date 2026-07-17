@@ -25,6 +25,11 @@ import {
   normalizeVerdict,
   parseJudgeResponse,
 } from '../src/decision.js';
+import {
+  assessPolicyRoute,
+  classifySafePathShape,
+} from '../src/policy-routing.js';
+import { redactForJudgeWithProvenance } from '../src/redact.js';
 
 const EXPECTED_HASH = `sha256:${'a'.repeat(64)}`;
 
@@ -848,6 +853,110 @@ test('applyLocalSafetyDowngrade treats every present session_status model value 
     );
     assert.equal(result.kind, 'review', `model: ${JSON.stringify(model)}`);
     assert.equal(result.local_guard, true, `model: ${JSON.stringify(model)}`);
+  }
+});
+
+test('shared safe-path classifier stays in parity with the local downgrade corpus', () => {
+  const allowed = normalizeVerdict(verdict());
+  const accessorWait = { kind: 'wait' };
+  Object.defineProperty(accessorWait, 'timeMs', {
+    enumerable: true,
+    get() { return 100; },
+  });
+  const accessorParams = { action: 'act', target: 'sandbox' };
+  Object.defineProperty(accessorParams, 'request', {
+    enumerable: true,
+    get() { return { kind: 'wait', timeMs: 100 }; },
+  });
+  const cases = [
+    ['session empty', 'session_status', {}, 'agent:main:main', 'session_status_current', true],
+    ['session current', 'session_status', { sessionKey: 'current' }, 'agent:main:main', 'session_status_current', true],
+    ['session bound', 'session_status', { sessionKey: 'agent:main:main' }, 'agent:main:main', 'session_status_current', true],
+    ['session wrong', 'session_status', { sessionKey: 'agent:other:main' }, 'agent:main:main', null, false],
+    ['session missing bound context', 'session_status', { sessionKey: 'agent:main:main' }, null, null, false],
+    ['session model', 'session_status', { model: null }, 'agent:main:main', null, false],
+    ['session extra', 'session_status', { sessionKey: 'current', extra: true }, 'agent:main:main', null, true],
+    [
+      'browser nested min',
+      'browser',
+      { action: 'act', target: 'sandbox', request: { kind: 'wait', timeMs: 0 } },
+      'agent:main:main',
+      'browser_wait',
+      true,
+    ],
+    [
+      'browser nested max',
+      'browser',
+      { action: 'act', target: 'sandbox', request: { kind: 'wait', timeMs: 30_000 } },
+      'agent:main:main',
+      'browser_wait',
+      true,
+    ],
+    [
+      'browser nested profile',
+      'browser',
+      {
+        action: 'act',
+        target: 'sandbox',
+        profile: 'openclaw',
+        request: { kind: 'wait', timeMs: 30_000 },
+      },
+      'agent:main:main',
+      'browser_wait',
+      true,
+    ],
+    ['browser legacy', 'browser', { action: 'act', target: 'sandbox', kind: 'wait', timeMs: 100 }, 'agent:main:main', 'browser_wait', true],
+    ['browser legacy profile', 'browser', { action: 'act', target: 'sandbox', profile: 'openclaw', kind: 'wait', timeMs: 100 }, 'agent:main:main', 'browser_wait', true],
+    ['browser host', 'browser', { action: 'act', target: 'host', request: { kind: 'wait', timeMs: 100 } }, 'agent:main:main', null, false],
+    ['browser blank profile', 'browser', { action: 'act', target: 'sandbox', profile: ' ', request: { kind: 'wait', timeMs: 100 } }, 'agent:main:main', null, true],
+    ['browser numeric profile', 'browser', { action: 'act', target: 'sandbox', profile: 42, request: { kind: 'wait', timeMs: 100 } }, 'agent:main:main', null, true],
+    ['browser legacy null profile', 'browser', { action: 'act', target: 'sandbox', profile: null, kind: 'wait', timeMs: 100 }, 'agent:main:main', null, true],
+    ['browser missing time', 'browser', { action: 'act', target: 'sandbox', request: { kind: 'wait' } }, 'agent:main:main', null, false],
+    ['browser negative', 'browser', { action: 'act', target: 'sandbox', request: { kind: 'wait', timeMs: -1 } }, 'agent:main:main', null, false],
+    ['browser over max', 'browser', { action: 'act', target: 'sandbox', request: { kind: 'wait', timeMs: 30_001 } }, 'agent:main:main', null, false],
+    ['browser fractional', 'browser', { action: 'act', target: 'sandbox', request: { kind: 'wait', timeMs: 1.5 } }, 'agent:main:main', null, false],
+    [
+      'browser nested extra',
+      'browser',
+      { action: 'act', target: 'sandbox', request: { kind: 'wait', timeMs: 100, extra: true } },
+      'agent:main:main',
+      null,
+      false,
+    ],
+    ['browser outer extra', 'browser', { action: 'act', target: 'sandbox', request: { kind: 'wait', timeMs: 100 }, extra: true }, 'agent:main:main', null, false],
+    ['browser request proxy', 'browser', { action: 'act', target: 'sandbox', request: new Proxy({ kind: 'wait', timeMs: 100 }, {}) }, 'agent:main:main', null, false],
+    ['browser request accessor', 'browser', { action: 'act', target: 'sandbox', request: accessorWait }, 'agent:main:main', null, false],
+    ['browser params accessor', 'browser', accessorParams, 'agent:main:main', null, false],
+    ['browser params proxy', 'browser', new Proxy({ action: 'act', target: 'sandbox', request: { kind: 'wait', timeMs: 100 } }, {}), 'agent:main:main', null, false],
+    ['browser null params', 'browser', null, 'agent:main:main', null, false],
+    ['browser array params', 'browser', [], 'agent:main:main', null, false],
+  ];
+
+  for (const [
+    name,
+    toolName,
+    params,
+    sessionKey,
+    expectedFamily,
+    expectedLocalAllow,
+  ] of cases) {
+    const action = localAction(toolName, params, sessionKey);
+    assert.equal(classifySafePathShape(action), expectedFamily, name);
+    let routeFamily = null;
+    try {
+      const route = assessPolicyRoute({
+        action,
+        pluginRoot: process.cwd(),
+        auditPath: '/tmp/llm-action-judge-safe-path-parity.jsonl',
+        redaction: redactForJudgeWithProvenance(params),
+      });
+      routeFamily = route.safe_path_candidate ? route.safe_path_family : null;
+    } catch {
+      routeFamily = null;
+    }
+    assert.equal(routeFamily, expectedFamily, `${name} routing`);
+    const downgraded = applyLocalSafetyDowngrade(allowed, toolName, params, action);
+    assert.equal(downgraded === allowed, expectedLocalAllow, `${name} local guard`);
   }
 });
 

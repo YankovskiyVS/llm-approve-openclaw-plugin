@@ -34,6 +34,7 @@ const RELEASE_PACKAGE_FILES = Object.freeze([
   'src/judge-client.js',
   'src/judge-schema.js',
   'src/plugin.js',
+  'src/policy-routing.js',
   'src/prompt.js',
   'src/redact.js',
   'src/run-decision-store.js',

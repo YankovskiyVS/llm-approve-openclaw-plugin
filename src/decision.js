@@ -19,6 +19,7 @@ import {
 } from './feedback.js';
 import { containsOpaqueData, isSecretBearingKey } from './redact.js';
 import { objectPrototypeIsPristine } from './intrinsics.js';
+import { classifySafePathShape } from './policy-routing.js';
 
 const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
@@ -3425,6 +3426,12 @@ export function applyLocalSafetyDowngrade(result, toolName, visibleParams, local
   }
   const action = localActionSnapshot(localAction, toolName);
   if (action === null) return localReview(result);
+  const safePathFamily = classifySafePathShape({
+    tool_name: toolName,
+    params: action.params,
+    session_key: action.sessionKey,
+  });
+  if (safePathFamily !== null) return result;
 
   if (toolName === 'read') {
     const path = ownDataValue(action.params, 'path');
