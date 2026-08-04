@@ -32,9 +32,9 @@ export function extractAutoApproveMarker(prompt) {
 }
 
 /**
- * Prefix used by manager when building the outbound A2A text payload only.
+ * Leading control token used by manager on outbound A2A text.
  * @returns {string}
  */
 export function autoApproveOutboundPrefix() {
-  return `\n\n${AUTOAPPROVE_CONTROL_MARKER}\n`;
+  return `${AUTOAPPROVE_CONTROL_MARKER}\n`;
 }

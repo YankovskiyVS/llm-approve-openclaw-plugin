@@ -49,11 +49,16 @@ export function attachA2ABridgeAdapter({
       return original(params);
     }
 
-    // Prefer decision already produced by before_tool_call (same turn, earlier hook).
+    // Prefer decision already produced by before_tool_call (same turn).
+    // a2a-gateway registers at priority 100 and may win the race — poll briefly.
     let decision = callId ? autoApproveStore.takeDecision(callId) : undefined;
+    if (decision !== 'allow-once' && decision !== 'deny' && callId) {
+      decision = await waitForBridgeDecision(autoApproveStore, callId, {
+        attempts: 40,
+        intervalMs: 25,
+      });
+    }
     if (decision !== 'allow-once' && decision !== 'deny') {
-      // Race: a2a hook may run before our store write settles in exotic hosts.
-      // Fail closed for autoapprove sessions.
       try {
         logger.warn?.('llm-action-judge: a2a autoapprove missing prior decision; denying');
       } catch {
@@ -90,6 +95,27 @@ export function attachA2ABridgeAdapter({
  * Retry attach until a2a-gateway registers the singleton (plugin load order
  * is not guaranteed).
  */
+async function waitForBridgeDecision(store, callId, {
+  attempts = 40,
+  intervalMs = 25,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  for (let i = 0; i < attempts; i += 1) {
+    const peeked = typeof store.peekDecision === 'function'
+      ? store.peekDecision(callId)
+      : undefined;
+    if (peeked === 'allow-once' || peeked === 'deny') {
+      return store.takeDecision(callId);
+    }
+    const taken = store.takeDecision(callId);
+    if (taken === 'allow-once' || taken === 'deny') {
+      return taken;
+    }
+    await sleep(intervalMs);
+  }
+  return undefined;
+}
+
 export function scheduleA2ABridgeAttach(options = {}, {
   attempts = 40,
   intervalMs = 250,
