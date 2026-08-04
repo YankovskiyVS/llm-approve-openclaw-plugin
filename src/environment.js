@@ -19,6 +19,7 @@ const ENV_NAMES = Object.freeze({
   timeout: 'OPENCLAW_JUDGE_TIMEOUT_MS',
   auditPath: 'OPENCLAW_JUDGE_AUDIT_PATH',
   logLevel: 'OPENCLAW_JUDGE_LOG_LEVEL',
+  a2aHitlReplace: 'OPENCLAW_JUDGE_A2A_HITL_REPLACE',
 });
 const ALLOWED_JUDGE_NAMES = new Set(Object.values(ENV_NAMES));
 const POLICY_ENV_NAMES = new Set([
@@ -26,6 +27,7 @@ const POLICY_ENV_NAMES = new Set([
   ENV_NAMES.auditPath,
   STATE_DIR_NAME,
 ]);
+const A2A_HITL_REPLACE_VALUES = new Set(['0', '1', 'true', 'false']);
 const PROFILE_CONFIG = Object.freeze({
   shadow: Object.freeze({ mode: 'autonomous', enforcement: 'shadow' }),
   supervised: Object.freeze({ mode: 'supervised', enforcement: 'enforce' }),
@@ -177,6 +179,14 @@ function resolveLogLevel(environment) {
   return LOG_LEVELS.has(value) ? value : invalidConfiguration();
 }
 
+function resolveA2AHitlReplace(environment) {
+  const value = explicitValue(environment, ENV_NAMES.a2aHitlReplace);
+  if (value === undefined) return false;
+  if (!A2A_HITL_REPLACE_VALUES.has(value.toLowerCase())) return invalidConfiguration();
+  const normalized = value.toLowerCase();
+  return normalized === '1' || normalized === 'true';
+}
+
 function resolveProvider(environment, getSharedProvider) {
   const apiKey = explicitValue(environment, ENV_NAMES.apiKey);
   const baseUrl = explicitValue(environment, ENV_NAMES.baseUrl);
@@ -262,6 +272,7 @@ export function resolveRuntimeSettings(options = {}) {
       auditPath: audit.auditPath,
       auditRoot: audit.auditRoot,
       logLevel: resolveLogLevel(environment),
+      a2aHitlReplace: resolveA2AHitlReplace(environment),
     });
   } catch {
     return invalidConfiguration();

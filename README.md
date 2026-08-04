@@ -187,6 +187,7 @@ openclaw gateway run
 | `OPENCLAW_JUDGE_TIMEOUT_MS` | Необязательно; canonical decimal integer `1000..30000`, default `30000` | Общий deadline одного judge call. Формы `1e3`, `01000`, `1000.0` и whitespace запрещены. Timeout в supervised ведёт в approval, в autonomous — в block. |
 | `OPENCLAW_JUDGE_AUDIT_PATH` | Необязательно; absolute path внутри OpenClaw `logs/`, суффикс `.jsonl` | Меняет путь audit-файла. Default: `${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/logs/llm-action-judge.jsonl`. |
 | `OPENCLAW_JUDGE_LOG_LEVEL` | Необязательно: `error`, `warn`, `info`, `silent`; default `info` | Управляет operational-логами плагина. На решения judge и JSONL audit не влияет. |
+| `OPENCLAW_JUDGE_A2A_HITL_REPLACE` | Необязательно: `0`/`1`/`true`/`false`; default off | Agent Space: без control marker не гейтить tool calls (чистый human HITL через a2a-gateway); с marker — LLM заменяет человека через monkey-patch bridge. |
 
 Не создавайте переменные вроде `OPENCLAW_JUDGE_MODEL`,
 `OPENCLAW_JUDGE_POLICY` или `OPENCLAW_JUDGE_PROMPT`: неизвестная переменная с

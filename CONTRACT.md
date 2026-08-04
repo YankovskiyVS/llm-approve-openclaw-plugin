@@ -27,6 +27,7 @@ plugin hooks.
 | `OPENCLAW_JUDGE_TIMEOUT_MS` | нет | `30000` | Canonical integer `1000..30000`. |
 | `OPENCLAW_JUDGE_AUDIT_PATH` | нет | OpenClaw logs path | Absolute `.jsonl` внутри OpenClaw logs root. |
 | `OPENCLAW_JUDGE_LOG_LEVEL` | нет | `info` | `error`, `warn`, `info`, `silent`. |
+| `OPENCLAW_JUDGE_A2A_HITL_REPLACE` | нет | off | `0`/`1`/`true`/`false`. Agent Space HITL replace mode. |
 
 Рекомендуемый новый deployment передаёт `API_KEY + PROFILE`. Если API key не
 передан, для совместимости используется цельная пара
@@ -227,3 +228,27 @@ OpenClaw config должен содержать:
 ```
 
 Полные команды установки и проверки: [DEPLOYMENT.md](DEPLOYMENT.md).
+
+## A2A HITL replace (Agent Space)
+
+Когда плагин работает рядом с `openclaw-a2a-gateway`, human-in-the-loop идёт через
+process-wide singleton
+`globalThis.__openclaw_a2a_tool_approval_bridge_v1__.requestApproval`.
+
+Плагин не меняет исходники a2a-gateway. Вместо этого:
+
+1. Agent Space manager при `is_autoapprove_enabled` добавляет в outbound A2A text
+   control marker `<!--openclaw:autoapprove=1-->` и
+   `metadata.llm.autoApprove=true`;
+2. `before_model_resolve` снимает marker с trusted prompt и помечает `runId` /
+   `sessionKey`;
+3. При `OPENCLAW_JUDGE_A2A_HITL_REPLACE=true` обычный `before_tool_call` **не
+   гейтит** tool calls без marker — остаётся чистый human HITL;
+4. С marker judge исполняется, решение кладётся в store по `toolCallId`,
+   native `requireApproval` на A2A-пути не используется (review/failure → deny);
+5. Monkey-patch `requestApproval` при активном autoapprove возвращает
+   `allow-once` или `deny` без ожидания человека.
+
+Контракт ключа singleton и формы `requestApproval({ toolName, params,
+toolCallId, runId, sessionKey, timeoutMs })` считается стабильным integration
+surface a2a-gateway; изменение ключа — breaking change для этого adapter.

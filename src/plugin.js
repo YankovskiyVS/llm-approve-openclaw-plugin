@@ -3,6 +3,8 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAction, createJudgeEnvelope } from './action.js';
+import { scheduleA2ABridgeAttach } from './a2a-bridge-adapter.js';
+import { createAutoApproveStore } from './autoapprove-store.js';
 import { buildAuditEvent, createAuditWriter } from './audit.js';
 import {
   APPROVAL_TIMEOUT_MS,
@@ -10,6 +12,7 @@ import {
   MIN_CONFIDENCE,
   PLUGIN_ID,
 } from './constants.js';
+import { extractAutoApproveMarker } from './control-marker.js';
 import { createContextStore } from './context-store.js';
 import {
   createApprovalDescription,
@@ -715,16 +718,41 @@ function inertAudit() {
   return { async write() { return false; } };
 }
 
+function sessionKeyFromHook(event, ctx) {
+  const fromCtx = readData(ctx, 'sessionKey');
+  if (fromCtx.ok && typeof fromCtx.value === 'string' && fromCtx.value.trim()) {
+    return fromCtx.value.trim();
+  }
+  const fromEvent = readData(event, 'sessionKey');
+  if (fromEvent.ok && typeof fromEvent.value === 'string' && fromEvent.value.trim()) {
+    return fromEvent.value.trim();
+  }
+  return undefined;
+}
+
+function bridgeDecisionFromMapped(mapped) {
+  if (mapped && mapped.block === true) return 'deny';
+  if (mapped && mapped.requireApproval) return 'deny';
+  if (mapped && mapped.params !== undefined && !mapped.block) return 'allow-once';
+  return 'deny';
+}
+
 export function createActionJudgePlugin(deps = {}) {
   const injectedStore = dependencyValue(deps, 'store', undefined);
   const injectedClient = dependencyValue(deps, 'client', undefined);
   const injectedAudit = dependencyValue(deps, 'audit', undefined);
   const injectedDecisionStore = dependencyValue(deps, 'decisionStore', undefined);
+  const injectedAutoApproveStore = dependencyValue(deps, 'autoApproveStore', undefined);
   const storeFactory = dependencyValue(deps, 'createContextStore', createContextStore);
   const decisionStoreFactory = dependencyValue(
     deps,
     'createRunDecisionStore',
     createRunDecisionStore,
+  );
+  const autoApproveStoreFactory = dependencyValue(
+    deps,
+    'createAutoApproveStore',
+    createAutoApproveStore,
   );
   const clientFactory = dependencyValue(deps, 'createJudgeClient', createJudgeClient);
   const auditFactory = dependencyValue(deps, 'createAuditWriter', createAuditWriter);
@@ -733,6 +761,7 @@ export function createActionJudgePlugin(deps = {}) {
   const parse = dependencyValue(deps, 'parseJudgeResponse', parseJudgeResponse);
   const normalize = dependencyValue(deps, 'normalizeVerdict', normalizeVerdict);
   const mapper = dependencyValue(deps, 'mapVerdict', mapVerdict);
+  const bridgeAttach = dependencyValue(deps, 'scheduleA2ABridgeAttach', scheduleA2ABridgeAttach);
 
   function register(api) {
     let setupFailed = false;
@@ -845,15 +874,58 @@ export function createActionJudgePlugin(deps = {}) {
     }
     if (audit === undefined) audit = inertAudit();
 
+    let autoApproveStore = injectedAutoApproveStore;
+    if (autoApproveStore === undefined) {
+      try {
+        if (typeof autoApproveStoreFactory !== 'function') {
+          throw new TypeError('invalid autoapprove store factory');
+        }
+        autoApproveStore = autoApproveStoreFactory({
+          ttlMs: STORE_TTL_MS,
+          maxEntries: STORE_MAX_ENTRIES,
+          now: Date.now,
+        });
+      } catch {
+        autoApproveStore = createAutoApproveStore({
+          ttlMs: STORE_TTL_MS,
+          maxEntries: STORE_MAX_ENTRIES,
+          now: Date.now,
+        });
+        setupFailed = true;
+      }
+    }
+
+    try {
+      if (typeof bridgeAttach === 'function') {
+        bridgeAttach({
+          autoApproveStore,
+          logger: lifecycleLogger,
+        });
+      }
+    } catch {
+      // A2A adapter is best-effort; human HITL remains available via original bridge.
+    }
+
+    const a2aHitlReplace = settingsValid
+      ? settings.a2aHitlReplace === true
+      : false;
+
     function captureTrustedIntent(event, ctx) {
       try {
         const prompt = readData(event, 'prompt');
         const runId = readData(ctx, 'runId');
-        if (!prompt.ok || !runId.ok || !isTrustedUserRequest(prompt.value)
+        if (!prompt.ok || !runId.ok || typeof prompt.value !== 'string'
           || !isNonBlankString(runId.value)) return;
+        const extracted = extractAutoApproveMarker(prompt.value);
+        if (extracted.enabled) {
+          autoApproveStore.markRun(runId.value);
+          const sessionKey = sessionKeyFromHook(event, ctx);
+          if (sessionKey) autoApproveStore.markSession(sessionKey);
+        }
+        if (!isTrustedUserRequest(extracted.stripped)) return;
         const put = methodValue(store, 'put');
         if (!put) return;
-        suppressRejection(put.call(store, runId.value, prompt.value));
+        suppressRejection(put.call(store, runId.value, extracted.stripped));
       } catch {
         // Capture is deliberately fail-safe and has no transcript fallback.
       }
@@ -881,9 +953,20 @@ export function createActionJudgePlugin(deps = {}) {
       let routeAssessmentFailed = false;
       let assessingRoute = false;
       let mappedDecision;
+      let autoApproveActive = false;
 
       try {
         const identity = identitySnapshot(event, ctx);
+        const sessionKey = sessionKeyFromHook(event, ctx);
+        autoApproveActive = autoApproveStore.isActive({
+          runId: identity.ok ? identity.runId : undefined,
+          sessionKey,
+        });
+        // In A2A HITL-replace mode, leave tools alone unless this chat opted in.
+        // Local / non-A2A installs keep classic always-on gating.
+        if (a2aHitlReplace && !autoApproveActive) {
+          return undefined;
+        }
         if (boundedDecisionIdentity(identity)) {
           trackedIdentity = identity;
           try {
@@ -1167,8 +1250,30 @@ export function createActionJudgePlugin(deps = {}) {
             fellBack: mappedDecision.fellBack,
           };
         }
+        if (autoApproveActive && trackedIdentity?.toolCallId) {
+          autoApproveStore.putDecision(
+            trackedIdentity.toolCallId,
+            bridgeDecisionFromMapped(mappedDecision.value),
+          );
+        }
+        // For A2A autoapprove: never use native requireApproval (A2A ignores it).
+        // Allow continues so the patched bridge can return allow-once; deny blocks.
+        if (autoApproveActive && mappedDecision.value?.requireApproval) {
+          const blocked = {
+            block: true,
+            blockReason: mappedDecision.value.requireApproval.description
+              || createBlockFeedback(selectFeedbackCode(result)),
+          };
+          if (trackedIdentity?.toolCallId) {
+            autoApproveStore.putDecision(trackedIdentity.toolCallId, 'deny');
+          }
+          return blocked;
+        }
         return mappedDecision.value;
       } catch {
+        if (autoApproveActive && trackedIdentity?.toolCallId) {
+          autoApproveStore.putDecision(trackedIdentity.toolCallId, 'deny');
+        }
         return safeFallbackMapping(config, failure(), params);
       }
     }

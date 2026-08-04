@@ -56,12 +56,36 @@ test('uses detached immutable legacy defaults and shared provider', () => {
     auditPath: '/home/tester/.openclaw/logs/llm-action-judge.jsonl',
     auditRoot: '/home/tester/.openclaw/logs',
     logLevel: 'info',
+    a2aHitlReplace: false,
   });
   assert.equal(Object.isFrozen(settings), true);
   assert.equal(Object.isFrozen(settings.config), true);
   assert.equal(Object.isFrozen(settings.providerConfig), true);
   provider.apiKey = 'mutated-key';
   assert.equal(settings.providerConfig.apiKey, SHARED_KEY);
+});
+
+test('accepts A2A HITL replace flag', () => {
+  for (const [value, expected] of [
+    ['1', true],
+    ['true', true],
+    ['0', false],
+    ['false', false],
+  ]) {
+    const settings = resolve({
+      environment: {
+        OPENCLAW_JUDGE_API_KEY: DEDICATED_KEY,
+        OPENCLAW_JUDGE_A2A_HITL_REPLACE: value,
+      },
+    });
+    assert.equal(settings.a2aHitlReplace, expected);
+  }
+  assertInvalid({
+    environment: {
+      OPENCLAW_JUDGE_API_KEY: DEDICATED_KEY,
+      OPENCLAW_JUDGE_A2A_HITL_REPLACE: 'yes',
+    },
+  });
 });
 
 test('maps exact profiles over valid legacy config', () => {
