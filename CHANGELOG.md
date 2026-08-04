@@ -4,6 +4,9 @@
 
 ## 0.5.0 — 2026-07-17
 
+- Host floor lowered to OpenClaw `>=2026.4.21` (`peerDependencies`,
+  `openclaw.install.minHostVersion`, `openclaw.compat.pluginApi`) so the plugin
+  loads on the current evoclaw pin.
 - Добавлен безопасный worker feedback: deny/review/failure получают фиксированный
   host-generated `blockReason` из закрытого `reason_code`, без raw rationale,
   параметров или provider errors.

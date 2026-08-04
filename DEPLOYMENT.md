@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- OpenClaw `>=2026.6.11`; archive install enforces the same floor through
+- OpenClaw `>=2026.4.21`; archive install enforces the same floor through
   `openclaw.install.minHostVersion` and `openclaw.compat.pluginApi`;
 - Node.js `>=22.19.0`;
 - доступ к `https://foundation-models.api.cloud.ru/v1`;

@@ -2,7 +2,7 @@
 
 Поддерживаемый internal release: `openclaw-llm-action-judge` 0.5.0 с policy
 `2026-07-16.1` на OpenClaw
-`>=2026.6.11` и Node.js `>=22.19.0`.
+`>=2026.4.21` и Node.js `>=22.19.0`.
 
 ## Security boundary
 

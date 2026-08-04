@@ -40,11 +40,14 @@ const EXPECTED_PACKAGE_FILES = [
   'openclaw.plugin.json',
   'package.json',
   'schemas/judge-verdict.schema.json',
+  'src/a2a-bridge-adapter.js',
   'src/action.js',
   'src/audit.js',
+  'src/autoapprove-store.js',
   'src/config.js',
   'src/constants.js',
   'src/context-store.js',
+  'src/control-marker.js',
   'src/decision.js',
   'src/environment.js',
   'src/feedback.js',
@@ -105,12 +108,12 @@ test('package metadata pins the internal 0.5.0 release contract and lean runtime
   });
   assert.deepEqual(metadata.engines, { node: '>=22.19.0' });
   assert.deepEqual(metadata.dependencies, { ajv: '8.20.0' });
-  assert.deepEqual(metadata.peerDependencies, { openclaw: '>=2026.6.11' });
+  assert.deepEqual(metadata.peerDependencies, { openclaw: '>=2026.4.21' });
   assert.deepEqual(metadata.peerDependenciesMeta, { openclaw: { optional: true } });
   assert.deepEqual(metadata.openclaw, {
     extensions: ['./index.js'],
-    install: { minHostVersion: '>=2026.6.11' },
-    compat: { pluginApi: '>=2026.6.11' },
+    install: { minHostVersion: '>=2026.4.21' },
+    compat: { pluginApi: '>=2026.4.21' },
   });
   assert.deepEqual(metadata.files, EXPECTED_FILES_FIELD);
   assert.equal(metadata.scripts.test, 'node --test');
@@ -170,8 +173,8 @@ test('release builder publishes one versioned tarball and matching sha256 into a
   assert.deepEqual(runtimeMetadata.peerDependenciesMeta, { openclaw: { optional: true } });
   assert.deepEqual(runtimeMetadata.openclaw, {
     extensions: ['./index.js'],
-    install: { minHostVersion: '>=2026.6.11' },
-    compat: { pluginApi: '>=2026.6.11' },
+    install: { minHostVersion: '>=2026.4.21' },
+    compat: { pluginApi: '>=2026.4.21' },
   });
   const [sourceSchema, packagedSchema] = await Promise.all([
     fs.readFile(path.join(PACKAGE_ROOT, 'schemas', 'judge-verdict.schema.json'), 'utf8'),

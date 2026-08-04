@@ -66,7 +66,7 @@ OpenClaw и на host без native sandbox может означать gateway 
 
 ## Требования
 
-- OpenClaw `>=2026.6.11`; тот же floor исполняется package metadata через
+- OpenClaw `>=2026.4.21`; тот же floor исполняется package metadata через
   `openclaw.install.minHostVersion` и `openclaw.compat.pluginApi`;
 - Node.js `>=22.19.0`;
 - доступ к `https://foundation-models.api.cloud.ru/v1`;
