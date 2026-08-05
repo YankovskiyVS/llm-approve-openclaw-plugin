@@ -14,7 +14,7 @@ import {
 } from '../src/control-marker.js';
 
 test('extractAutoApproveMarker detects and strips the HTML comment marker', () => {
-  const prompt = `Hello world${autoApproveOutboundPrefix()}Do the thing.`;
+  const prompt = `${autoApproveOutboundPrefix()}Hello world\nDo the thing.`;
   const extracted = extractAutoApproveMarker(prompt);
   assert.equal(extracted.enabled, true);
   assert.equal(extracted.stripped.includes(AUTOAPPROVE_CONTROL_MARKER), false);
@@ -42,7 +42,7 @@ test('autoapprove store tracks runs, sessions, and one-shot decisions', () => {
   assert.equal(store.takeDecision('call-1'), undefined);
 });
 
-test('a2a bridge adapter replaces human wait when autoapprove is active', async () => {
+test('a2a bridge adapter still calls HITL publish path on allow-once', async () => {
   const root = Object.create(null);
   const calls = [];
   root[A2A_BRIDGE_GLOBAL_KEY] = {
@@ -67,7 +67,8 @@ test('a2a bridge adapter replaces human wait when autoapprove is active', async 
     timeoutMs: 1000,
   });
   assert.equal(decision, 'allow-once');
-  assert.equal(calls.length, 0);
+  // Must go through original so pending_approval is published for WS/UI.
+  assert.equal(calls.length, 1);
 
   const human = await root[A2A_BRIDGE_GLOBAL_KEY].requestApproval({
     runId: 'run-human',
@@ -77,15 +78,42 @@ test('a2a bridge adapter replaces human wait when autoapprove is active', async 
     timeoutMs: 1000,
   });
   assert.equal(human, 'allow-once');
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
 
   attached.detach();
 });
 
-test('a2a bridge adapter fails closed when autoapprove active but decision missing', async () => {
+test('a2a bridge adapter denies without HITL wait when judge says deny', async () => {
   const root = Object.create(null);
+  const calls = [];
   root[A2A_BRIDGE_GLOBAL_KEY] = {
-    async requestApproval() {
+    async requestApproval(params) {
+      calls.push(params);
+      return 'allow-once';
+    },
+  };
+  const autoApproveStore = createAutoApproveStore({ now: () => 1 });
+  autoApproveStore.markRun('run-auto');
+  autoApproveStore.putDecision('call-deny', 'deny');
+  attachA2ABridgeAdapter({ autoApproveStore, root });
+
+  const decision = await root[A2A_BRIDGE_GLOBAL_KEY].requestApproval({
+    runId: 'run-auto',
+    toolCallId: 'call-deny',
+    toolName: 'exec',
+    params: {},
+    timeoutMs: 1000,
+  });
+  assert.equal(decision, 'deny');
+  assert.equal(calls.length, 0);
+});
+
+test('a2a bridge adapter falls back to HITL when decision is missing', async () => {
+  const root = Object.create(null);
+  const calls = [];
+  root[A2A_BRIDGE_GLOBAL_KEY] = {
+    async requestApproval(params) {
+      calls.push(params);
       return 'allow-once';
     },
   };
@@ -100,5 +128,6 @@ test('a2a bridge adapter fails closed when autoapprove active but decision missi
     params: {},
     timeoutMs: 1000,
   });
-  assert.equal(decision, 'deny');
+  assert.equal(decision, 'allow-once');
+  assert.equal(calls.length, 1);
 });

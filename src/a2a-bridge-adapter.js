@@ -3,9 +3,12 @@
  *
  * openclaw-a2a-gateway exposes a process-wide ToolApprovalBridge on
  * `globalThis.__openclaw_a2a_tool_approval_bridge_v1__`. Its before_tool_call
- * hook awaits `requestApproval(...)`. We wrap that method so that when the
- * chat has autoapprove enabled, the LLM judge decision (stored by our
- * before_tool_call) replaces the human without modifying a2a-gateway source.
+ * hook awaits `requestApproval(...)`.
+ *
+ * For autoapprove chats we still call the original bridge for allow decisions so
+ * pending_approval / tool artifacts are published on the A2A bus (WS/UI see the
+ * same tool timeline as manual HITL). agent-space-manager then auto-sends
+ * allow-once. Only judge deny short-circuits without waiting on a human.
  */
 
 export const A2A_BRIDGE_GLOBAL_KEY = '__openclaw_a2a_tool_approval_bridge_v1__';
@@ -49,8 +52,7 @@ export function attachA2ABridgeAdapter({
       return original(params);
     }
 
-    // Prefer decision already produced by before_tool_call (same turn).
-    // a2a-gateway registers at priority 100 and may win the race — poll briefly.
+    // Wait briefly for before_tool_call (priority -1000) to store the verdict.
     let decision = callId ? autoApproveStore.takeDecision(callId) : undefined;
     if (decision !== 'allow-once' && decision !== 'deny' && callId) {
       decision = await waitForBridgeDecision(autoApproveStore, callId, {
@@ -58,19 +60,24 @@ export function attachA2ABridgeAdapter({
         intervalMs: 25,
       });
     }
-    if (decision !== 'allow-once' && decision !== 'deny') {
+
+    if (decision === 'deny') {
       try {
-        logger.warn?.('llm-action-judge: a2a autoapprove missing prior decision; denying');
+        logger.info?.('llm-action-judge: a2a autoapprove deny (no human wait)');
       } catch {
         // ignore logger failures
       }
-      decision = 'deny';
+      return 'deny';
     }
 
-    // When allow-once: skip original wait so the human UI is not required.
-    // Bridge publish of pending_approval is skipped; after_tool_call still emits
-    // terminal tool status via a2a hooks.
-    return decision;
+    // allow-once or unknown: use the real HITL path so pending_approval is
+    // published to A2A clients (tools visible over WS). Manager auto-approves.
+    try {
+      logger.info?.('llm-action-judge: a2a autoapprove deferring to HITL publish path');
+    } catch {
+      // ignore
+    }
+    return original(params);
   }
 
   bridge.requestApproval = wrappedRequestApproval;
@@ -91,10 +98,6 @@ export function attachA2ABridgeAdapter({
   };
 }
 
-/**
- * Retry attach until a2a-gateway registers the singleton (plugin load order
- * is not guaranteed).
- */
 async function waitForBridgeDecision(store, callId, {
   attempts = 40,
   intervalMs = 25,
@@ -116,6 +119,10 @@ async function waitForBridgeDecision(store, callId, {
   return undefined;
 }
 
+/**
+ * Retry attach until a2a-gateway registers the singleton (plugin load order
+ * is not guaranteed).
+ */
 export function scheduleA2ABridgeAttach(options = {}, {
   attempts = 40,
   intervalMs = 250,

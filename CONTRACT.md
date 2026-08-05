@@ -246,8 +246,11 @@ process-wide singleton
    гейтит** tool calls без marker — остаётся чистый human HITL;
 4. С marker judge исполняется, решение кладётся в store по `toolCallId`,
    native `requireApproval` на A2A-пути не используется (review/failure → deny);
-5. Monkey-patch `requestApproval` при активном autoapprove возвращает
-   `allow-once` или `deny` без ожидания человека.
+5. Monkey-patch `requestApproval` при активном autoapprove:
+   - `deny` — сразу, без human wait и без publish pending_approval;
+   - `allow-once` / неизвестный вердикт — вызывает оригинальный bridge,
+     чтобы A2A опубликовал pending_approval (тулы/стрим как при ручном HITL);
+     agent-space-manager затем сам шлёт allow-once.
 
 Контракт ключа singleton и формы `requestApproval({ toolName, params,
 toolCallId, runId, sessionKey, timeoutMs })` считается стабильным integration
