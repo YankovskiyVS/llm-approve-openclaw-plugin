@@ -48,6 +48,10 @@ import { redactForJudgeWithProvenance } from './redact.js';
 
 const PLUGIN_NAME = 'LLM Action Judge';
 const PLUGIN_DESCRIPTION = 'LLM-gated tool-call approval for OpenClaw';
+// Survive OpenClaw mid-run plugin re-registration (browser auto-enable / config
+// rewrite). Without a process-wide store, before_model_resolve intent is wiped
+// and before_tool_call fails closed with invalid_judge_response in ~10ms.
+const PROCESS_STORES_KEY = '__openclaw_llm_action_judge_stores_v1__';
 const HOOK_PRIORITY = -1000;
 const STORE_TTL_MS = 30 * 60 * 1000;
 const STORE_MAX_ENTRIES = 1000;
@@ -542,17 +546,44 @@ function decisionMetadata(identity, result, judgeResult) {
   };
 }
 
-function getStoredPrompt(store, runId) {
+function getStoredPrompt(store, runId, sessionKey) {
   try {
     const get = methodValue(store, 'get');
-    if (!get) return undefined;
-    const value = get.call(store, runId);
-    if (typeof value === 'string') return value;
-    suppressRejection(value);
+    if (get && typeof runId === 'string' && runId.trim()) {
+      const value = get.call(store, runId);
+      if (typeof value === 'string') return value;
+      suppressRejection(value);
+    }
+    // A2A tool calls often use a different runId (e.g. chatcmpl_*) than
+    // before_model_resolve while sharing sessionKey=agent:…:a2a:{contextId}.
+    const getBySession = methodValue(store, 'getBySession');
+    if (getBySession && typeof sessionKey === 'string' && sessionKey.trim()) {
+      const bySession = getBySession.call(store, sessionKey);
+      if (typeof bySession === 'string') return bySession;
+      suppressRejection(bySession);
+    }
   } catch {
     // Missing trusted intent is the safe result for all store failures.
   }
   return undefined;
+}
+
+function resolveHookRunId(event, ctx) {
+  const fromCtx = readData(ctx, 'runId');
+  if (fromCtx.ok && isNonBlankString(fromCtx.value)) return fromCtx.value;
+  const fromEvent = readData(event, 'runId');
+  if (fromEvent.ok && isNonBlankString(fromEvent.value)) return fromEvent.value;
+  return undefined;
+}
+
+function processLocalStores() {
+  const root = globalThis;
+  let bag = root[PROCESS_STORES_KEY];
+  if (!bag || typeof bag !== 'object') {
+    bag = Object.create(null);
+    root[PROCESS_STORES_KEY] = bag;
+  }
+  return bag;
 }
 
 function verdictSnapshot(value, expectedHash) {
@@ -695,7 +726,7 @@ function notifySetupFailure(logger) {
 }
 
 function inertStore() {
-  return { put() {}, get() { return undefined; } };
+  return { put() {}, get() { return undefined; }, getBySession() { return undefined; } };
 }
 
 function failingDecisionStore() {
@@ -810,12 +841,18 @@ export function createActionJudgePlugin(deps = {}) {
     let store = injectedStore;
     if (store === undefined) {
       try {
-        if (typeof storeFactory !== 'function') throw new TypeError('invalid store factory');
-        store = storeFactory({
-          ttlMs: STORE_TTL_MS,
-          maxEntries: STORE_MAX_ENTRIES,
-          now: Date.now,
-        });
+        const bag = processLocalStores();
+        if (bag.contextStore && typeof bag.contextStore.get === 'function') {
+          store = bag.contextStore;
+        } else {
+          if (typeof storeFactory !== 'function') throw new TypeError('invalid store factory');
+          store = storeFactory({
+            ttlMs: STORE_TTL_MS,
+            maxEntries: STORE_MAX_ENTRIES,
+            now: Date.now,
+          });
+          bag.contextStore = store;
+        }
       } catch {
         store = inertStore();
         setupFailed = true;
@@ -825,17 +862,23 @@ export function createActionJudgePlugin(deps = {}) {
     let decisionStore = injectedDecisionStore;
     if (decisionStore === undefined) {
       try {
-        if (typeof decisionStoreFactory !== 'function') {
-          throw new TypeError('invalid decision store factory');
+        const bag = processLocalStores();
+        if (bag.decisionStore && typeof bag.decisionStore.isTripped === 'function') {
+          decisionStore = bag.decisionStore;
+        } else {
+          if (typeof decisionStoreFactory !== 'function') {
+            throw new TypeError('invalid decision store factory');
+          }
+          decisionStore = decisionStoreFactory({
+            ttlMs: STORE_TTL_MS,
+            maxRuns: STORE_MAX_ENTRIES,
+            historyLimit: DECISION_STORE_HISTORY_LIMIT,
+            consecutiveDenyLimit: DECISION_STORE_CONSECUTIVE_DENY_LIMIT,
+            rollingDenyLimit: DECISION_STORE_ROLLING_DENY_LIMIT,
+            now: Date.now,
+          });
+          bag.decisionStore = decisionStore;
         }
-        decisionStore = decisionStoreFactory({
-          ttlMs: STORE_TTL_MS,
-          maxRuns: STORE_MAX_ENTRIES,
-          historyLimit: DECISION_STORE_HISTORY_LIMIT,
-          consecutiveDenyLimit: DECISION_STORE_CONSECUTIVE_DENY_LIMIT,
-          rollingDenyLimit: DECISION_STORE_ROLLING_DENY_LIMIT,
-          now: Date.now,
-        });
       } catch {
         decisionStore = failingDecisionStore();
         setupFailed = true;
@@ -877,14 +920,20 @@ export function createActionJudgePlugin(deps = {}) {
     let autoApproveStore = injectedAutoApproveStore;
     if (autoApproveStore === undefined) {
       try {
-        if (typeof autoApproveStoreFactory !== 'function') {
-          throw new TypeError('invalid autoapprove store factory');
+        const bag = processLocalStores();
+        if (bag.autoApproveStore && typeof bag.autoApproveStore.isActive === 'function') {
+          autoApproveStore = bag.autoApproveStore;
+        } else {
+          if (typeof autoApproveStoreFactory !== 'function') {
+            throw new TypeError('invalid autoapprove store factory');
+          }
+          autoApproveStore = autoApproveStoreFactory({
+            ttlMs: STORE_TTL_MS,
+            maxEntries: STORE_MAX_ENTRIES,
+            now: Date.now,
+          });
+          bag.autoApproveStore = autoApproveStore;
         }
-        autoApproveStore = autoApproveStoreFactory({
-          ttlMs: STORE_TTL_MS,
-          maxEntries: STORE_MAX_ENTRIES,
-          now: Date.now,
-        });
       } catch {
         autoApproveStore = createAutoApproveStore({
           ttlMs: STORE_TTL_MS,
@@ -913,19 +962,18 @@ export function createActionJudgePlugin(deps = {}) {
     function captureTrustedIntent(event, ctx) {
       try {
         const prompt = readData(event, 'prompt');
-        const runId = readData(ctx, 'runId');
-        if (!prompt.ok || !runId.ok || typeof prompt.value !== 'string'
-          || !isNonBlankString(runId.value)) return;
+        const runId = resolveHookRunId(event, ctx);
+        if (!prompt.ok || typeof prompt.value !== 'string' || runId === undefined) return;
         const extracted = extractAutoApproveMarker(prompt.value);
+        const sessionKey = sessionKeyFromHook(event, ctx);
         if (extracted.enabled) {
-          autoApproveStore.markRun(runId.value);
-          const sessionKey = sessionKeyFromHook(event, ctx);
+          autoApproveStore.markRun(runId);
           if (sessionKey) autoApproveStore.markSession(sessionKey);
         }
         if (!isTrustedUserRequest(extracted.stripped)) return;
         const put = methodValue(store, 'put');
         if (!put) return;
-        suppressRejection(put.call(store, runId.value, extracted.stripped));
+        suppressRejection(put.call(store, runId, extracted.stripped, sessionKey));
       } catch {
         // Capture is deliberately fail-safe and has no transcript fallback.
       }
@@ -1048,7 +1096,7 @@ export function createActionJudgePlugin(deps = {}) {
         if (trackedIdentity !== undefined && !skipJudge
           && actionMatchesIdentity(action, identity)
           && envelope !== undefined && typeof expectedHash === 'string') {
-          const userPrompt = getStoredPrompt(store, identity.runId);
+          const userPrompt = getStoredPrompt(store, identity.runId, sessionKey);
           if (isTrustedUserRequest(userPrompt)) {
             const review = methodValue(client, 'review');
             if (review) {

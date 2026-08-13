@@ -4,6 +4,13 @@ function assertNonBlankString(value, name) {
   }
 }
 
+function normalizeSessionKey(sessionKey) {
+  if (typeof sessionKey !== 'string') return undefined;
+  const raw = sessionKey.trim();
+  if (!raw) return undefined;
+  return raw.replace(/^session:/u, '');
+}
+
 export function createContextStore({ ttlMs, maxEntries, now } = {}) {
   if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
     throw new TypeError('ttlMs must be a positive finite number');
@@ -15,40 +22,63 @@ export function createContextStore({ ttlMs, maxEntries, now } = {}) {
     throw new TypeError('now must be a function');
   }
 
-  const entries = new Map();
+  const byRun = new Map();
+  const bySession = new Map();
+
+  function pruneMap(map, timestamp) {
+    for (const [key, entry] of map) {
+      if (timestamp - entry.createdAt >= ttlMs) map.delete(key);
+    }
+  }
 
   function pruneAt(timestamp) {
-    for (const [runId, entry] of entries) {
-      if (timestamp - entry.createdAt >= ttlMs) entries.delete(runId);
-    }
+    pruneMap(byRun, timestamp);
+    pruneMap(bySession, timestamp);
   }
 
   function prune() {
     pruneAt(now());
   }
 
-  function put(runId, prompt) {
+  function evictOldest(map) {
+    while (map.size > maxEntries) {
+      map.delete(map.keys().next().value);
+    }
+  }
+
+  function put(runId, prompt, sessionKey) {
     assertNonBlankString(runId, 'runId');
     assertNonBlankString(prompt, 'prompt');
 
     const timestamp = now();
     pruneAt(timestamp);
-    entries.delete(runId);
-    entries.set(runId, { prompt, createdAt: timestamp });
+    byRun.delete(runId);
+    byRun.set(runId, { prompt, createdAt: timestamp });
+    evictOldest(byRun);
 
-    while (entries.size > maxEntries) {
-      entries.delete(entries.keys().next().value);
+    const normalizedSession = normalizeSessionKey(sessionKey);
+    if (normalizedSession) {
+      bySession.delete(normalizedSession);
+      bySession.set(normalizedSession, { prompt, createdAt: timestamp, runId });
+      evictOldest(bySession);
     }
   }
 
   function get(runId) {
     prune();
-    return entries.get(runId)?.prompt;
+    return byRun.get(runId)?.prompt;
+  }
+
+  function getBySession(sessionKey) {
+    prune();
+    const normalizedSession = normalizeSessionKey(sessionKey);
+    if (!normalizedSession) return undefined;
+    return bySession.get(normalizedSession)?.prompt;
   }
 
   function size() {
-    return entries.size;
+    return byRun.size;
   }
 
-  return { put, get, prune, size };
+  return { put, get, getBySession, prune, size };
 }

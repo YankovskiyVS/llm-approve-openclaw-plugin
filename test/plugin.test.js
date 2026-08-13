@@ -22,6 +22,7 @@ import {
 
 const NO_INJECTION = Symbol('no injection');
 const NO_PROVIDER = Symbol('no provider');
+const USE_PROCESS_STORE = Symbol('use process store');
 const RAW_PROMPT = '  Read the exact status file.  ';
 const PROMPT_SECRET = 'prompt-secret-never-audit-7c2';
 const PARAM_SECRET = 'param-secret-never-audit-8d3';
@@ -118,7 +119,26 @@ function setup({
   if (environment !== NO_INJECTION) injected.environment = environment;
   if (client !== NO_INJECTION) injected.client = client;
   if (audit !== NO_INJECTION) injected.audit = effectiveAudit;
-  if (store !== NO_INJECTION) injected.store = store;
+  // Default to an isolated context store. Clear process-local singletons so
+  // autoapprove/decision bags from prior tests cannot leak (except explicit
+  // USE_PROCESS_STORE survival coverage).
+  if (store === USE_PROCESS_STORE) {
+    // Leave store unset so register() reuses process-local singletons.
+  } else {
+    delete globalThis.__openclaw_llm_action_judge_stores_v1__;
+    if (store === NO_INJECTION) {
+      // Keep unset when the test supplies a store factory (constructor/failure paths).
+      if (typeof injected.createContextStore !== 'function') {
+        injected.store = createContextStore({
+          ttlMs: 30 * 60 * 1000,
+          maxEntries: 1000,
+          now: Date.now,
+        });
+      }
+    } else {
+      injected.store = store;
+    }
+  }
 
   const fake = makeApi({
     pluginConfig,
@@ -2842,4 +2862,119 @@ test('concurrent distinct run IDs never cross-contaminate trusted intent', async
     ],
   );
   assert.equal(harness.auditEvents.length, 2);
+});
+
+test('resolves trusted prompt via session when A2A tool runId differs', async () => {
+  const client = verdictClient();
+  const harness = setup({
+    client,
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+    environment: {
+      OPENCLAW_JUDGE_API_KEY: API_SECRET,
+      OPENCLAW_JUDGE_PROFILE: 'autonomous',
+      OPENCLAW_JUDGE_A2A_HITL_REPLACE: 'true',
+    },
+  });
+  const sessionKey = 'agent:main:a2a:67087752-7405-4454-af04-c0441dc57eec';
+  capturePrompt(
+    harness,
+    '<!--openclaw:autoapprove=1-->\nRead the status file.',
+    '0d4bab10-22d5-40da-a576-9148388bf718',
+    { ctx: { sessionKey } },
+  );
+
+  const call = callData('chatcmpl_a8ef283f-70fa-436e-a623-ffe1fcb159ad', {
+    path: '/tmp/status',
+  });
+  call.ctx.sessionKey = sessionKey;
+  call.event.sessionKey = sessionKey;
+
+  const result = await harness.beforeTool(call.event, call.ctx);
+
+  assert.equal(client.calls.length, 1);
+  assert.equal(
+    client.calls[0].userPrompt.includes('Read the status file.'),
+    true,
+  );
+  assert.deepEqual(result.params, { path: '/tmp/status' });
+  assert.equal(result.block, undefined);
+});
+
+test('process-local stores keep trusted intent across plugin re-registration', async () => {
+  delete globalThis.__openclaw_llm_action_judge_stores_v1__;
+  const client = verdictClient();
+  const environment = {
+    OPENCLAW_JUDGE_API_KEY: API_SECRET,
+    OPENCLAW_JUDGE_PROFILE: 'autonomous',
+    OPENCLAW_JUDGE_A2A_HITL_REPLACE: 'true',
+  };
+  const sessionKey = 'agent:main:a2a:ctx-re-register';
+
+  const first = setup({
+    client,
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+    environment,
+    store: USE_PROCESS_STORE,
+    deps: {
+      scheduleA2ABridgeAttach() { return { attached: false, detach() {} }; },
+    },
+  });
+  capturePrompt(
+    first,
+    '<!--openclaw:autoapprove=1-->\nList workspace files.',
+    'run-before-reload',
+    { ctx: { sessionKey } },
+  );
+
+  // Simulate OpenClaw mid-run plugin re-register (new register(), no injected store).
+  const second = setup({
+    client,
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+    environment,
+    store: USE_PROCESS_STORE,
+    deps: {
+      scheduleA2ABridgeAttach() { return { attached: false, detach() {} }; },
+    },
+  });  const call = callData('run-after-reload', { path: '/tmp/status' });
+  call.ctx.sessionKey = sessionKey;
+  call.event.sessionKey = sessionKey;
+
+  const result = await second.beforeTool(call.event, call.ctx);
+
+  assert.equal(client.calls.length, 1);
+  assert.match(client.calls[0].userPrompt, /List workspace files/u);
+  assert.deepEqual(result.params, { path: '/tmp/status' });
+  delete globalThis.__openclaw_llm_action_judge_stores_v1__;
+});
+
+test('missing prompt with session autoapprove still fails closed without session index', async () => {
+  const store = {
+    put() {},
+    get() { return undefined; },
+    // No getBySession: reproduces pre-fix A2A runId mismatch.
+  };
+  const harness = setup({
+    store,
+    pluginConfig: { mode: 'autonomous', enforcement: 'enforce' },
+    environment: {
+      OPENCLAW_JUDGE_API_KEY: API_SECRET,
+      OPENCLAW_JUDGE_PROFILE: 'autonomous',
+      OPENCLAW_JUDGE_A2A_HITL_REPLACE: 'true',
+    },
+    deps: {
+      autoApproveStore: {
+        markRun() {},
+        markSession() {},
+        isActive() { return true; },
+        putDecision() {},
+        takeDecision() { return undefined; },
+        peekDecision() { return undefined; },
+      },
+      scheduleA2ABridgeAttach() { return { attached: false, detach() {} }; },
+    },
+  });
+  const call = callData('chatcmpl_missing', { path: '/tmp/status' });
+  call.ctx.sessionKey = 'agent:main:a2a:ctx';
+  const result = await harness.beforeTool(call.event, call.ctx);
+  assertBlocked(result, 'invalid_judge_response');
 });

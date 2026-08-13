@@ -12,6 +12,23 @@ test('returns the prompt only for the exact run ID', () => {
   assert.equal(store.get(' run-a '), '  trusted request  ');
 });
 
+test('indexes prompts by session key for A2A runId mismatch', () => {
+  const store = createContextStore({ ttlMs: 50, maxEntries: 2, now: () => 100 });
+
+  store.put('agent-run', 'Read BOOTSTRAP.md', 'session:agent:main:a2a:ctx-1');
+
+  assert.equal(store.get('agent-run'), 'Read BOOTSTRAP.md');
+  assert.equal(store.get('chatcmpl_other'), undefined);
+  assert.equal(
+    store.getBySession('agent:main:a2a:ctx-1'),
+    'Read BOOTSTRAP.md',
+  );
+  assert.equal(
+    store.getBySession('session:agent:main:a2a:ctx-1'),
+    'Read BOOTSTRAP.md',
+  );
+});
+
 test('expires entries at the TTL boundary', () => {
   let now = 100;
   const store = createContextStore({ ttlMs: 50, maxEntries: 2, now: () => now });
