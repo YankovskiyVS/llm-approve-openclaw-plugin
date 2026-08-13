@@ -42,7 +42,7 @@ test('autoapprove store tracks runs, sessions, and one-shot decisions', () => {
   assert.equal(store.takeDecision('call-1'), undefined);
 });
 
-test('a2a bridge adapter still calls HITL publish path on allow-once', async () => {
+test('a2a bridge adapter returns allow-once from judge without HITL wait', async () => {
   const root = Object.create(null);
   const calls = [];
   root[A2A_BRIDGE_GLOBAL_KEY] = {
@@ -67,8 +67,8 @@ test('a2a bridge adapter still calls HITL publish path on allow-once', async () 
     timeoutMs: 1000,
   });
   assert.equal(decision, 'allow-once');
-  // Must go through original so pending_approval is published for WS/UI.
-  assert.equal(calls.length, 1);
+  // Judge is the approver — do not block on manager/HITL.
+  assert.equal(calls.length, 0);
 
   const human = await root[A2A_BRIDGE_GLOBAL_KEY].requestApproval({
     runId: 'run-human',
@@ -78,7 +78,7 @@ test('a2a bridge adapter still calls HITL publish path on allow-once', async () 
     timeoutMs: 1000,
   });
   assert.equal(human, 'allow-once');
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 1);
 
   attached.detach();
 });

@@ -5,10 +5,9 @@
  * `globalThis.__openclaw_a2a_tool_approval_bridge_v1__`. Its before_tool_call
  * hook awaits `requestApproval(...)`.
  *
- * For autoapprove chats we still call the original bridge for allow decisions so
- * pending_approval / tool artifacts are published on the A2A bus (WS/UI see the
- * same tool timeline as manual HITL). agent-space-manager then auto-sends
- * allow-once. Only judge deny short-circuits without waiting on a human.
+ * For autoapprove chats the judge is the approver: allow-once and deny are
+ * returned immediately (no human / manager wait). Unknown verdicts still fall
+ * back to the original HITL bridge.
  */
 
 export const A2A_BRIDGE_GLOBAL_KEY = '__openclaw_a2a_tool_approval_bridge_v1__';
@@ -61,6 +60,15 @@ export function attachA2ABridgeAdapter({
       });
     }
 
+    if (decision === 'allow-once') {
+      try {
+        logger.info?.('llm-action-judge: a2a autoapprove allow-once (judge approved)');
+      } catch {
+        // ignore logger failures
+      }
+      return 'allow-once';
+    }
+
     if (decision === 'deny') {
       try {
         logger.info?.('llm-action-judge: a2a autoapprove deny (no human wait)');
@@ -70,10 +78,9 @@ export function attachA2ABridgeAdapter({
       return 'deny';
     }
 
-    // allow-once or unknown: use the real HITL path so pending_approval is
-    // published to A2A clients (tools visible over WS). Manager auto-approves.
+    // No judge verdict yet: keep native HITL so a human/manager can still decide.
     try {
-      logger.info?.('llm-action-judge: a2a autoapprove deferring to HITL publish path');
+      logger.info?.('llm-action-judge: a2a autoapprove missing verdict; falling back to HITL');
     } catch {
       // ignore
     }
