@@ -21,6 +21,7 @@ import {
 import {
   applyLocalSafetyDowngrade,
   applyOpaqueDowngrade,
+  applyTrustedObservationAllow,
   mapVerdict,
   normalizeVerdict,
   parseJudgeResponse,
@@ -3074,6 +3075,118 @@ test('applyLocalSafetyDowngrade never upgrades a non-allow result or inspects ho
     );
   }
   assert.equal(trapCalls, 0);
+});
+
+test('applyTrustedObservationAllow upgrades out_of_scope reviews for proven-passive reads', () => {
+  const path = '/home/openclaw/.openclaw/workspace/main/BOOTSTRAP.md';
+  const params = { path };
+  const reviewed = {
+    kind: 'review',
+    reason: 'exceeds scope',
+    verdict: verdict({
+      decision: 'review',
+      risk: 'low',
+      authorization: 'low',
+      reason_code: 'out_of_scope',
+      confidence: 0.8,
+    }),
+  };
+  const allowed = applyTrustedObservationAllow(
+    reviewed,
+    'read',
+    params,
+    localAction('read', params),
+  );
+  assert.equal(allowed.kind, 'allow');
+  assert.equal(allowed.trusted_observation, true);
+
+  const execParams = { command: `cat ${path}` };
+  const execAllowed = applyTrustedObservationAllow(
+    {
+      kind: 'review',
+      reason: 'exceeds scope',
+      verdict: verdict({
+        decision: 'review',
+        risk: 'low',
+        authorization: 'low',
+        reason_code: 'out_of_scope',
+        confidence: 0.8,
+      }),
+    },
+    'exec',
+    execParams,
+    localAction('exec', execParams),
+  );
+  assert.equal(execAllowed.kind, 'allow');
+
+  const mediumAuth = normalizeVerdict(verdict({ authorization: 'medium' }));
+  assert.equal(mediumAuth.kind, 'review');
+  assert.equal(
+    applyTrustedObservationAllow(
+      mediumAuth,
+      'read',
+      params,
+      localAction('read', params),
+    ).kind,
+    'allow',
+  );
+
+  const denied = {
+    kind: 'deny',
+    reason: 'no',
+    verdict: verdict({
+      decision: 'deny',
+      risk: 'low',
+      authorization: 'low',
+      reason_code: 'out_of_scope',
+    }),
+  };
+  assert.strictEqual(
+    applyTrustedObservationAllow(denied, 'read', params, localAction('read', params)),
+    denied,
+  );
+
+  const writeParams = { path: '/tmp/notes.txt', content: 'x' };
+  const writeReview = {
+    kind: 'review',
+    reason: 'exceeds scope',
+    verdict: verdict({
+      decision: 'review',
+      risk: 'low',
+      authorization: 'low',
+      reason_code: 'out_of_scope',
+    }),
+  };
+  assert.strictEqual(
+    applyTrustedObservationAllow(
+      writeReview,
+      'write',
+      writeParams,
+      localAction('write', writeParams),
+    ),
+    writeReview,
+  );
+
+  const dangerousExec = { command: 'rm -rf /tmp/cache' };
+  const dangerousReview = {
+    kind: 'review',
+    reason: 'exceeds scope',
+    verdict: verdict({
+      decision: 'review',
+      risk: 'low',
+      authorization: 'low',
+      reason_code: 'out_of_scope',
+    }),
+  };
+  assert.strictEqual(
+    applyTrustedObservationAllow(
+      dangerousReview,
+      'exec',
+      dangerousExec,
+      localAction('exec', dangerousExec),
+    ),
+    dangerousReview,
+  );
 });
 
 test('applyLocalSafetyDowngrade fails closed without executing proxy or accessor traps', () => {

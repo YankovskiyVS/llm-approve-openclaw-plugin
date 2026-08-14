@@ -24,6 +24,7 @@ import {
 import {
   applyLocalSafetyDowngrade,
   applyOpaqueDowngrade,
+  applyTrustedObservationAllow,
   mapVerdict,
   normalizeVerdict,
   parseJudgeResponse,
@@ -1230,8 +1231,13 @@ export function createActionJudgePlugin(deps = {}) {
                         const safeNormalized = normalizedSnapshot(normalized, verdict);
                         if (safeNormalized) {
                           judgeResult = verdict;
-                          result = applyLocalSafetyDowngrade(
-                            applyOpaqueDowngrade(safeNormalized, localVisibleParams),
+                          result = applyTrustedObservationAllow(
+                            applyLocalSafetyDowngrade(
+                              applyOpaqueDowngrade(safeNormalized, localVisibleParams),
+                              localToolName,
+                              localVisibleParams,
+                              action,
+                            ),
                             localToolName,
                             localVisibleParams,
                             action,

@@ -2,6 +2,17 @@
 
 Все заметные изменения `openclaw-llm-action-judge` фиксируются в этом файле.
 
+## 0.5.1 — 2026-08-14
+
+- Trusted observation allow: low-risk proven-passive tools (`read`, safe `exec`
+  cat/list/status shapes, and other observational tools) can recover from model
+  `review` with `out_of_scope` / `authorization_missing` / `other_policy_risk`,
+  and from medium-authorization allows that failed the local high-auth gate.
+  Intentional `deny` and local-guard/opaque failures stay blocked.
+- Judge prompt clarifies that capability/identity questions authorize reading
+  OpenClaw workspace bootstrap/instruction files.
+- `BOOTSTRAP.md` added to workspace bootstrap write-protection set.
+
 ## 0.5.0 — 2026-07-17
 
 - Host floor lowered to OpenClaw `>=2026.4.21` (`peerDependencies`,

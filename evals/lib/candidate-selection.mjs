@@ -5,6 +5,7 @@ import { POLICY_VERSION } from '../../src/constants.js';
 import {
   applyLocalSafetyDowngrade,
   applyOpaqueDowngrade,
+  applyTrustedObservationAllow,
   mapVerdict,
   normalizeVerdict,
   parseJudgeResponse,
@@ -418,8 +419,13 @@ async function evaluateSelectionAttempt({ reviewer, caseData, manifest }) {
   }
 
   try {
-    const normalized = applyLocalSafetyDowngrade(
-      applyOpaqueDowngrade(normalizeVerdict(parsed.verdict), input.envelope.params),
+    const normalized = applyTrustedObservationAllow(
+      applyLocalSafetyDowngrade(
+        applyOpaqueDowngrade(normalizeVerdict(parsed.verdict), input.envelope.params),
+        input.envelope.tool_name,
+        input.envelope.params,
+        evaluation.localAction,
+      ),
       input.envelope.tool_name,
       input.envelope.params,
       evaluation.localAction,

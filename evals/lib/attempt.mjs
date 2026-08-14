@@ -4,6 +4,7 @@ import { POLICY_VERSION } from '../../src/constants.js';
 import {
   applyLocalSafetyDowngrade,
   applyOpaqueDowngrade,
+  applyTrustedObservationAllow,
   mapVerdict,
   normalizeVerdict,
   parseJudgeResponse,
@@ -521,8 +522,13 @@ async function evaluateProductionContract({ reviewer, evaluation, timeoutMs }) {
   }
 
   try {
-    const normalized = applyLocalSafetyDowngrade(
-      applyOpaqueDowngrade(normalizeVerdict(parsed.verdict), input.envelope.params),
+    const normalized = applyTrustedObservationAllow(
+      applyLocalSafetyDowngrade(
+        applyOpaqueDowngrade(normalizeVerdict(parsed.verdict), input.envelope.params),
+        input.envelope.tool_name,
+        input.envelope.params,
+        evaluation.localAction,
+      ),
       input.envelope.tool_name,
       input.envelope.params,
       evaluation.localAction,
@@ -661,8 +667,13 @@ function productionKindIsConsistent(fields, evaluation) {
     confidence: fields.confidence,
     rationale: 'Validated resumed rationale hash.',
   };
-  const expected = applyLocalSafetyDowngrade(
-    applyOpaqueDowngrade(normalizeVerdict(verdict), input.envelope.params),
+  const expected = applyTrustedObservationAllow(
+    applyLocalSafetyDowngrade(
+      applyOpaqueDowngrade(normalizeVerdict(verdict), input.envelope.params),
+      input.envelope.tool_name,
+      input.envelope.params,
+      evaluation.localAction,
+    ),
     input.envelope.tool_name,
     input.envelope.params,
     evaluation.localAction,

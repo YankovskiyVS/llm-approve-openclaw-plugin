@@ -299,6 +299,7 @@ const SENSITIVE_READ_DIRECTORIES = new Set([
 ]);
 const OPENCLAW_WORKSPACE_BOOTSTRAP_FILES = new Set([
   'agents.md',
+  'bootstrap.md',
   'heartbeat.md',
   'identity.md',
   'memory.md',
@@ -306,6 +307,28 @@ const OPENCLAW_WORKSPACE_BOOTSTRAP_FILES = new Set([
   'tools.md',
   'user.md',
 ]);
+const TRUSTED_OBSERVATION_TOOLS = new Set([
+  'read',
+  'exec',
+  'bash',
+  'web_fetch',
+  'gateway',
+  'sessions_history',
+  'session_status',
+  'process',
+  'skill_workshop',
+  'transcripts',
+  'nodes',
+  'cron',
+  'browser',
+  'subagents',
+]);
+const TRUSTED_OBSERVATION_OVERRIDE_REASONS = new Set([
+  'out_of_scope',
+  'authorization_missing',
+  'other_policy_risk',
+]);
+const TRUSTED_OBSERVATION_ALLOW_REASON = 'trusted low-risk observation';
 const SAFE_CONFIG_METADATA_COMPONENTS = new Set([
   'apikeypath',
   'baseurl',
@@ -3413,6 +3436,55 @@ function editWeakensPackageBoundary(params) {
   // Edit receives only replacement fragments, not the complete ordered rule file.
   // Whitespace and rule order are semantic, so monotonic safety cannot be proven here.
   return true;
+}
+
+export function applyTrustedObservationAllow(result, toolName, visibleParams, localAction) {
+  const kind = ownDataValue(result, 'kind');
+  if (!kind.ok || kind.value !== 'review') return result;
+  if (typeof toolName !== 'string' || !TRUSTED_OBSERVATION_TOOLS.has(toolName)) return result;
+  if (!isDataOnly(visibleParams)) return result;
+
+  const opaque = ownDataValue(result, 'opaque');
+  if (opaque.ok && opaque.value === true) return result;
+  const localGuard = ownDataValue(result, 'local_guard');
+  if (localGuard.ok && localGuard.value === true) return result;
+
+  const verdict = ownDataValue(result, 'verdict');
+  if (!verdict.ok || !isDataOnly(verdict.value)) return result;
+  const risk = ownDataValue(verdict.value, 'risk');
+  if (risk.ok && risk.value !== 'low') return result;
+
+  const decision = ownDataValue(verdict.value, 'decision');
+  const reasonCode = ownDataValue(verdict.value, 'reason_code');
+  const reason = ownDataValue(result, 'reason');
+  const mediumAuthAllow = decision.ok
+    && decision.value === 'allow'
+    && reason.ok
+    && reason.value === 'judge allow did not satisfy local safety gate';
+  const overridableReview = decision.ok
+    && decision.value === 'review'
+    && reasonCode.ok
+    && typeof reasonCode.value === 'string'
+    && TRUSTED_OBSERVATION_OVERRIDE_REASONS.has(reasonCode.value);
+  if (!mediumAuthAllow && !overridableReview) return result;
+
+  const probe = applyLocalSafetyDowngrade(
+    {
+      kind: 'allow',
+      reason: TRUSTED_OBSERVATION_ALLOW_REASON,
+      verdict: verdict.value,
+    },
+    toolName,
+    visibleParams,
+    localAction,
+  );
+  if (probe.kind !== 'allow') return result;
+  return {
+    kind: 'allow',
+    reason: TRUSTED_OBSERVATION_ALLOW_REASON,
+    verdict: verdict.value,
+    trusted_observation: true,
+  };
 }
 
 export function applyLocalSafetyDowngrade(result, toolName, visibleParams, localAction) {
