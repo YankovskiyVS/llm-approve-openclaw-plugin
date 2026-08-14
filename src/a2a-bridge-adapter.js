@@ -20,8 +20,10 @@ export const A2A_BRIDGE_WRAPPED_FLAG = '__llmActionJudgeA2aWrapped';
 export const A2A_BRIDGE_STORE_KEY = '__llmActionJudgeAutoApproveStore';
 
 const DECISION_POLL_INTERVAL_MS = 50;
-// Cover a full judge LLM round-trip (default 30s) plus local guard slack.
-const DECISION_WAIT_MS = JUDGE_TIMEOUT_MS + 5_000;
+// Backup only: judge hooks run at priority 1100 (before a2a 100) and putDecision
+// before requestApproval waits. Keep this short so a callId miss cannot burn
+// the assistant model timeout (~surface_error reason=timeout).
+const DECISION_WAIT_MS = Math.min(5_000, JUDGE_TIMEOUT_MS);
 
 /**
  * @param {object} options
@@ -78,7 +80,7 @@ export function attachA2ABridgeAdapter({
       return original(params);
     }
 
-    // Wait for before_tool_call (priority -1000) to store the verdict.
+    // Wait for judge before_tool_call (priority 1100) to store the verdict.
     let decision = callId ? store.takeDecision(callId) : undefined;
     if (decision !== 'allow-once' && decision !== 'deny' && callId) {
       decision = await waitForBridgeDecision(store, callId, {

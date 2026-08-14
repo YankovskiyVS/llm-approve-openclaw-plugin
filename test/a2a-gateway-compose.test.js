@@ -123,9 +123,9 @@ test('a2a-gateway + judge composition allows tools on technical judge failure', 
   const judgeGate = registrations.find((r) => r.name === 'before_tool_call')?.handler;
   assert.equal(typeof capture, 'function');
   assert.equal(typeof judgeGate, 'function');
-  assert.equal(
+    assert.equal(
     registrations.find((r) => r.name === 'before_tool_call')?.options?.priority,
-    -1000,
+    1100,
   );
 
   const sessionKey = 'agent:main:a2a:ctx-compose';
@@ -152,7 +152,7 @@ test('a2a-gateway + judge composition allows tools on technical judge failure', 
 
   const a2aHook = createA2AGatewayHook(root[A2A_BRIDGE_GLOBAL_KEY]);
 
-  // Same order as OpenClaw: judge priority -1000, then a2a priority 100.
+  // OpenClaw: higher priority first — judge 1100, then a2a 100.
   const judgeResult = await judgeGate(event, ctx);
   const a2aResult = await a2aHook(event, ctx);
   const merged = mergeHookResults([judgeResult, a2aResult]);

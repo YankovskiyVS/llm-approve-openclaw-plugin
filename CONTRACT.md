@@ -157,7 +157,8 @@ first-party families, также остаются LLM/native-gated: local guard 
 
 ## Hook ordering invariant
 
-Оба hook плагина регистрируются с priority `-1000`. `before_tool_call` строит
+Оба hook плагина регистрируются с priority `1100` (выше a2a-gateway `100`,
+чтобы judge записал вердикт до `requestApproval`). `before_tool_call` строит
 commitment и возвращает проверенные `params`, поэтому он обязан быть
 единственным либо последним hook, способным менять параметры tool call. Другой
 hook может модифицировать `params` до judge; после judge он может только

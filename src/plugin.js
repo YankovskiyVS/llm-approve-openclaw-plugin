@@ -53,7 +53,10 @@ const PLUGIN_DESCRIPTION = 'LLM-gated tool-call approval for OpenClaw';
 // rewrite). Without a process-wide store, before_model_resolve intent is wiped
 // and before_tool_call fails closed with invalid_judge_response in ~10ms.
 const PROCESS_STORES_KEY = '__openclaw_llm_action_judge_stores_v1__';
-const HOOK_PRIORITY = -1000;
+// OpenClaw runs hooks in descending priority (higher first). Must beat
+// a2a-gateway before_tool_call (priority 100), otherwise the bridge waits
+// ~JUDGE_TIMEOUT for a verdict that has not been written yet.
+const HOOK_PRIORITY = 1_100;
 const STORE_TTL_MS = 30 * 60 * 1000;
 const STORE_MAX_ENTRIES = 1000;
 const DECISION_STORE_HISTORY_LIMIT = 50;

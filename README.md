@@ -225,7 +225,7 @@ openclaw plugins doctor
 - `diagnostics=[]`;
 - после judge нет другого `before_tool_call`, способного менять `params`.
 
-Оба hook регистрируются с priority `-1000`. Для exact-action binding judge должен
+Оба hook регистрируются с priority `1100` (выше a2a-gateway `100`). Для exact-action binding judge должен
 быть последним hook, которому разрешено менять `before_tool_call.params`: hook,
 исполняющийся позже, может только наблюдать или блокировать, но не подменять
 параметры. Если платформа не может доказать этот порядок, enforcement включать
@@ -300,7 +300,7 @@ guard остаются обязательными. Fallback на `json_object` �
 - minimum allow confidence: `0.8`;
 - default timeout: `30000 ms`;
 - endpoint: только `https://foundation-models.api.cloud.ru/v1`;
-- hooks priority: `-1000`;
+- hooks priority: `1100` (before a2a-gateway `100`);
 - output: strict `json_schema` + local Ajv validation.
 
 Priority сам по себе не защищает от hook, который платформа поставила после

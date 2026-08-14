@@ -265,8 +265,8 @@ test('exports the factory and default plugin, and registers exactly two priority
   assert.deepEqual(
     harness.registrations.map(({ name, options }) => ({ name, options })),
     [
-      { name: 'before_model_resolve', options: { priority: -1000 } },
-      { name: 'before_tool_call', options: { priority: -1000 } },
+      { name: 'before_model_resolve', options: { priority: 1100 } },
+      { name: 'before_tool_call', options: { priority: 1100 } },
     ],
   );
 });
