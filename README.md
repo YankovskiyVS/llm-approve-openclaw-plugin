@@ -1,9 +1,73 @@
 # OpenClaw LLM Action Judge
 
-Плагин `openclaw-llm-action-judge` версии `0.5.0` проверяет каждый proposed tool
+Плагин `openclaw-llm-action-judge` версии `0.5.1` проверяет каждый proposed tool
 call отдельной фиксированной LLM **до исполнения**. Низкорисковое и явно
 разрешённое действие может пройти автоматически, сомнительное — запросить
 подтверждение, опасное — быть заблокировано.
+
+## Подключение в общий стек OpenClaw 2026.7.1-2
+
+В проверенной конфигурации этот репозиторий находится рядом с
+`openclaw-a2a-gateway` и `nango-openclaw-plugin` на ветке
+`openclaw-2026.7.1-2`.
+
+Judge загружается как внешний плагин:
+
+```json
+{
+  "plugins": {
+    "allow": [
+      "a2a-gateway",
+      "browser",
+      "diagnostics-otel",
+      "llm-action-judge",
+      "nango-proxy"
+    ],
+    "load": {
+      "paths": [
+        "/opt/openclaw-stack/openclaw-a2a-gateway",
+        "/opt/openclaw-stack/llm-approve-openclaw-plugin",
+        "/opt/openclaw-stack/nango-openclaw-plugin"
+      ]
+    },
+    "entries": {
+      "llm-action-judge": {
+        "enabled": true,
+        "hooks": {
+          "allowConversationAccess": true
+        },
+        "config": {
+          "mode": "autonomous",
+          "enforcement": "shadow"
+        }
+      }
+    }
+  }
+}
+```
+
+В Docker репозиторий монтировался read-only в `/plugins/judge`; этот путь
+указывается в контейнерном `plugins.load.paths`.
+
+Gateway-процесс должен получить:
+
+```dotenv
+OPENCLAW_JUDGE_API_KEY=<secret>
+OPENCLAW_JUDGE_PROFILE=shadow
+```
+
+`hooks.allowConversationAccess=true` нужен, чтобы `before_model_resolve` и
+`before_tool_call` видели trusted user request. Первый rollout выполняйте с
+`enforcement=shadow`, проверьте `logs/llm-action-judge.jsonl`, затем
+осознанно переходите на `enforce`.
+
+В общем стеке A2A HITL выключен
+(`plugins.entries.a2a-gateway.config.toolApproval.enabled=false`), чтобы один
+tool call не ожидал два независимых approval. Judge остаётся глобальным gate
+для Browser, Nango и остальных инструментов OpenClaw.
+
+Полная схема портов, mounts, общей конфигурации и end-to-end проверки находится
+в [инструкции five-plugin stack](https://github.com/YankovskiyVS/openclaw-a2a-gateway/blob/openclaw-2026.7.1-2/docs/FIVE_PLUGIN_STACK_RU.md).
 
 ## Суть решения
 
@@ -66,7 +130,7 @@ OpenClaw и на host без native sandbox может означать gateway 
 
 ## Требования
 
-- OpenClaw `>=2026.4.21`; тот же floor исполняется package metadata через
+- OpenClaw `>=2026.7.1-2`; тот же floor исполняется package metadata через
   `openclaw.install.minHostVersion` и `openclaw.compat.pluginApi`;
 - Node.js `>=22.19.0`;
 - доступ к `https://foundation-models.api.cloud.ru/v1`;
@@ -79,7 +143,19 @@ OpenClaw и на host без native sandbox может означать gateway 
 
 ## Установка
 
-Команды выполняются из каталога `releases/v0.5.0`:
+Для source-версии `0.5.1` из ветки совместимости:
+
+```bash
+git checkout openclaw-2026.7.1-2
+npm ci
+openclaw plugins install --link .
+```
+
+Либо добавьте абсолютный путь репозитория в `plugins.load.paths`, как показано
+в разделе общего стека выше.
+
+Последний подготовленный package artifact — `0.5.0`. Следующие команды
+выполняются из каталога `releases/v0.5.0`:
 
 ```bash
 shasum -a 256 -c openclaw-llm-action-judge-0.5.0.tgz.sha256
