@@ -2947,7 +2947,7 @@ test('process-local stores keep trusted intent across plugin re-registration', a
   delete globalThis.__openclaw_llm_action_judge_stores_v1__;
 });
 
-test('missing prompt with session autoapprove still fails closed without session index', async () => {
+test('autoapprove fails open on technical judge failure without trusted prompt', async () => {
   const store = {
     put() {},
     get() { return undefined; },
@@ -2976,5 +2976,8 @@ test('missing prompt with session autoapprove still fails closed without session
   const call = callData('chatcmpl_missing', { path: '/tmp/status' });
   call.ctx.sessionKey = 'agent:main:a2a:ctx';
   const result = await harness.beforeTool(call.event, call.ctx);
-  assertBlocked(result, 'invalid_judge_response');
+  // Autoapprove fail-opens technical judge failures so tools are not blocked
+  // after A2A already allowed the call.
+  assert.deepEqual(result.params, { path: '/tmp/status' });
+  assert.equal(result.block, undefined);
 });

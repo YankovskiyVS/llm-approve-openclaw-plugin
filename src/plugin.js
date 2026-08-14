@@ -831,6 +831,16 @@ function bridgeDecisionFromMapped(mapped) {
   return 'deny';
 }
 
+function isTechnicalJudgeFailure(result) {
+  if (!result || result.kind !== 'failure') return false;
+  const code = selectFeedbackCode(result);
+  return code === 'invalid_judge_response' || code === 'judge_unavailable';
+}
+
+function autoApproveFailOpen(params) {
+  return { params: params && typeof params === 'object' ? params : {} };
+}
+
 export function createActionJudgePlugin(deps = {}) {
   const injectedStore = dependencyValue(deps, 'store', undefined);
   const injectedClient = dependencyValue(deps, 'client', undefined);
@@ -1370,6 +1380,27 @@ export function createActionJudgePlugin(deps = {}) {
           };
         }
         if (autoApproveActive) {
+          // Technical judge failures must not block autoapprove tools: the A2A
+          // bridge already fail-opens to allow-once, and a mid-run plugin reload
+          // can leave the gate without trusted intent / a valid LLM verdict.
+          if (
+            (mappedDecision.value?.block === true || mappedDecision.value?.requireApproval)
+            && isTechnicalJudgeFailure(result)
+          ) {
+            mappedDecision = {
+              value: autoApproveFailOpen(params),
+              effectiveResult: result,
+              effectiveDecisionSource: decisionSource,
+              fellBack: true,
+            };
+            try {
+              lifecycleLogger.info(
+                'llm-action-judge: a2a autoapprove technical failure; allow',
+              );
+            } catch {
+              // ignore logger failures
+            }
+          }
           const bridgeCallId = resolveCallIdForBridge(trackedIdentity, action, event, ctx);
           if (bridgeCallId) {
             autoApproveStore.putDecision(
@@ -1396,9 +1427,11 @@ export function createActionJudgePlugin(deps = {}) {
       } catch {
         if (autoApproveActive) {
           const bridgeCallId = resolveCallIdForBridge(trackedIdentity, action, event, ctx);
+          const allowed = autoApproveFailOpen(params);
           if (bridgeCallId) {
-            autoApproveStore.putDecision(bridgeCallId, 'deny');
+            autoApproveStore.putDecision(bridgeCallId, 'allow-once');
           }
+          return allowed;
         }
         return safeFallbackMapping(config, failure(), params);
       }

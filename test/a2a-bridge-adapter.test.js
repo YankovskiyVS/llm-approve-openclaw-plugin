@@ -136,3 +136,30 @@ test('a2a bridge adapter allows when decision is missing', async () => {
   assert.equal(decision, 'allow-once');
   assert.equal(calls.length, 0);
 });
+
+test('a2a bridge adapter refreshes store pointer after re-attach', async () => {
+  const root = Object.create(null);
+  root[A2A_BRIDGE_GLOBAL_KEY] = {
+    async requestApproval() {
+      return 'deny';
+    },
+  };
+  const first = createAutoApproveStore({ now: () => 1 });
+  first.markRun('run-1');
+  first.putDecision('call-1', 'deny');
+  attachA2ABridgeAdapter({ autoApproveStore: first, root });
+
+  const second = createAutoApproveStore({ now: () => 1 });
+  second.markRun('run-1');
+  second.putDecision('call-1', 'allow-once');
+  attachA2ABridgeAdapter({ autoApproveStore: second, root });
+
+  const decision = await root[A2A_BRIDGE_GLOBAL_KEY].requestApproval({
+    runId: 'run-1',
+    toolCallId: 'call-1',
+    toolName: 'read',
+    params: {},
+    timeoutMs: 1000,
+  });
+  assert.equal(decision, 'allow-once');
+});

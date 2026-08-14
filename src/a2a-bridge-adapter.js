@@ -8,12 +8,16 @@
  * For autoapprove chats the judge is the approver: allow-once and deny are
  * returned immediately (no human / manager wait). If no verdict arrives within
  * the judge wait window, autoapprove fails open with allow-once.
+ *
+ * The autoApproveStore reference is kept on the bridge object so mid-run plugin
+ * re-registration can refresh it without losing the monkey-patch.
  */
 
 import { JUDGE_TIMEOUT_MS } from './constants.js';
 
 export const A2A_BRIDGE_GLOBAL_KEY = '__openclaw_a2a_tool_approval_bridge_v1__';
 export const A2A_BRIDGE_WRAPPED_FLAG = '__llmActionJudgeA2aWrapped';
+export const A2A_BRIDGE_STORE_KEY = '__llmActionJudgeAutoApproveStore';
 
 const DECISION_POLL_INTERVAL_MS = 50;
 // Cover a full judge LLM round-trip (default 30s) plus local guard slack.
@@ -41,6 +45,11 @@ export function attachA2ABridgeAdapter({
   if (!bridge || typeof bridge.requestApproval !== 'function') {
     return { attached: false, detach() {} };
   }
+
+  // Always refresh the live store pointer (OpenClaw may re-register plugins
+  // mid-run while leaving this monkey-patch in place).
+  bridge[A2A_BRIDGE_STORE_KEY] = autoApproveStore;
+
   if (bridge[A2A_BRIDGE_WRAPPED_FLAG] === true) {
     return { attached: true, detach() {} };
   }
@@ -51,22 +60,28 @@ export function attachA2ABridgeAdapter({
     Math.ceil(Math.max(0, decisionWaitMs) / Math.max(1, decisionPollIntervalMs)),
   );
 
+  function liveStore() {
+    const current = bridge[A2A_BRIDGE_STORE_KEY];
+    return current && typeof current.isActive === 'function' ? current : autoApproveStore;
+  }
+
   async function wrappedRequestApproval(params = {}) {
+    const store = liveStore();
     const sessionKey = typeof params.sessionKey === 'string' ? params.sessionKey : undefined;
     const runId = typeof params.runId === 'string' ? params.runId : undefined;
     const callId = typeof params.toolCallId === 'string' && params.toolCallId.trim()
       ? params.toolCallId.trim()
       : undefined;
 
-    const active = autoApproveStore.isActive({ runId, sessionKey });
+    const active = store.isActive({ runId, sessionKey });
     if (!active) {
       return original(params);
     }
 
     // Wait for before_tool_call (priority -1000) to store the verdict.
-    let decision = callId ? autoApproveStore.takeDecision(callId) : undefined;
+    let decision = callId ? store.takeDecision(callId) : undefined;
     if (decision !== 'allow-once' && decision !== 'deny' && callId) {
-      decision = await waitForBridgeDecision(autoApproveStore, callId, {
+      decision = await waitForBridgeDecision(store, callId, {
         attempts: waitAttempts,
         intervalMs: decisionPollIntervalMs,
       });
@@ -112,6 +127,11 @@ export function attachA2ABridgeAdapter({
         delete bridge[A2A_BRIDGE_WRAPPED_FLAG];
       } catch {
         bridge[A2A_BRIDGE_WRAPPED_FLAG] = false;
+      }
+      try {
+        delete bridge[A2A_BRIDGE_STORE_KEY];
+      } catch {
+        bridge[A2A_BRIDGE_STORE_KEY] = undefined;
       }
     },
   };
