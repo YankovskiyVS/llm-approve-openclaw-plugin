@@ -45,6 +45,7 @@ import {
 } from './run-decision-store.js';
 import { assessPolicyRoute } from './policy-routing.js';
 import { redactForJudgeWithProvenance } from './redact.js';
+import { resolveAgentModelId } from './model-id.js';
 
 const PLUGIN_NAME = 'LLM Action Judge';
 const PLUGIN_DESCRIPTION = 'LLM-gated tool-call approval for OpenClaw';
@@ -568,6 +569,62 @@ function getStoredPrompt(store, runId, sessionKey) {
   return undefined;
 }
 
+function getStoredModelId(store, runId, sessionKey) {
+  try {
+    const getModel = methodValue(store, 'getModel');
+    if (getModel && typeof runId === 'string' && runId.trim()) {
+      const value = getModel.call(store, runId);
+      if (typeof value === 'string' && value.trim()) return value.trim();
+      suppressRejection(value);
+    }
+    const getModelBySession = methodValue(store, 'getModelBySession');
+    if (getModelBySession && typeof sessionKey === 'string' && sessionKey.trim()) {
+      const bySession = getModelBySession.call(store, sessionKey);
+      if (typeof bySession === 'string' && bySession.trim()) return bySession.trim();
+      suppressRejection(bySession);
+    }
+  } catch {
+    // Model fallback is handled by the judge client default.
+  }
+  return undefined;
+}
+
+function resolveHookModelId(event, ctx, fallbackModelId) {
+  const eventModel = readData(event, 'model');
+  const ctxModel = readData(ctx, 'model');
+  const eventModelId = readData(event, 'modelId');
+  const ctxModelId = readData(ctx, 'modelId');
+  return resolveAgentModelId(
+    eventModel.ok ? eventModel.value : undefined,
+    ctxModel.ok ? ctxModel.value : undefined,
+    eventModelId.ok ? eventModelId.value : undefined,
+    ctxModelId.ok ? ctxModelId.value : undefined,
+    fallbackModelId,
+  );
+}
+
+function resolveCallIdForBridge(identity, action, event, ctx) {
+  if (identity?.toolCallId && typeof identity.toolCallId === 'string' && identity.toolCallId.trim()) {
+    return identity.toolCallId.trim();
+  }
+  const fromAction = readData(action, 'tool_call_id');
+  if (fromAction.ok && typeof fromAction.value === 'string' && fromAction.value.trim()) {
+    return fromAction.value.trim();
+  }
+  for (const [source, key] of [
+    [event, 'toolCallId'],
+    [ctx, 'toolCallId'],
+    [event, 'callId'],
+    [ctx, 'callId'],
+  ]) {
+    const value = readData(source, key);
+    if (value.ok && typeof value.value === 'string' && value.value.trim()) {
+      return value.value.trim();
+    }
+  }
+  return undefined;
+}
+
 function resolveHookRunId(event, ctx) {
   const fromCtx = readData(ctx, 'runId');
   if (fromCtx.ok && isNonBlankString(fromCtx.value)) return fromCtx.value;
@@ -726,7 +783,13 @@ function notifySetupFailure(logger) {
 }
 
 function inertStore() {
-  return { put() {}, get() { return undefined; }, getBySession() { return undefined; } };
+  return {
+    put() {},
+    get() { return undefined; },
+    getModel() { return undefined; },
+    getBySession() { return undefined; },
+    getModelBySession() { return undefined; },
+  };
 }
 
 function failingDecisionStore() {
@@ -886,6 +949,10 @@ export function createActionJudgePlugin(deps = {}) {
     }
 
     let client = injectedClient;
+    const defaultsModel = nestedData(api, ['config', 'agents', 'defaults', 'model']);
+    const agentDefaultModelId = resolveAgentModelId(
+      defaultsModel.ok ? defaultsModel.value : undefined,
+    );
     if (!settingsValid) {
       client = failingClient();
     } else if (client === undefined) {
@@ -894,6 +961,7 @@ export function createActionJudgePlugin(deps = {}) {
         client = clientFactory({
           providerConfig: settings.providerConfig,
           timeoutMs: settings.timeoutMs,
+          ...(agentDefaultModelId ? { modelId: agentDefaultModelId } : {}),
         });
       } catch {
         client = failingClient();
@@ -973,7 +1041,8 @@ export function createActionJudgePlugin(deps = {}) {
         if (!isTrustedUserRequest(extracted.stripped)) return;
         const put = methodValue(store, 'put');
         if (!put) return;
-        suppressRejection(put.call(store, runId, extracted.stripped, sessionKey));
+        const modelId = resolveHookModelId(event, ctx, agentDefaultModelId);
+        suppressRejection(put.call(store, runId, extracted.stripped, sessionKey, modelId));
       } catch {
         // Capture is deliberately fail-safe and has no transcript fallback.
       }
@@ -1105,6 +1174,8 @@ export function createActionJudgePlugin(deps = {}) {
                 reviewed = await Promise.resolve().then(() => review.call(client, {
                   userPrompt,
                   envelope,
+                  modelId: getStoredModelId(store, identity.runId, sessionKey)
+                    || resolveHookModelId(event, ctx, agentDefaultModelId),
                 }));
               } catch {
                 result = failure('judge_unavailable');
@@ -1298,11 +1369,14 @@ export function createActionJudgePlugin(deps = {}) {
             fellBack: mappedDecision.fellBack,
           };
         }
-        if (autoApproveActive && trackedIdentity?.toolCallId) {
-          autoApproveStore.putDecision(
-            trackedIdentity.toolCallId,
-            bridgeDecisionFromMapped(mappedDecision.value),
-          );
+        if (autoApproveActive) {
+          const bridgeCallId = resolveCallIdForBridge(trackedIdentity, action, event, ctx);
+          if (bridgeCallId) {
+            autoApproveStore.putDecision(
+              bridgeCallId,
+              bridgeDecisionFromMapped(mappedDecision.value),
+            );
+          }
         }
         // For A2A autoapprove: never use native requireApproval (A2A ignores it).
         // Allow continues so the patched bridge can return allow-once; deny blocks.
@@ -1312,15 +1386,19 @@ export function createActionJudgePlugin(deps = {}) {
             blockReason: mappedDecision.value.requireApproval.description
               || createBlockFeedback(selectFeedbackCode(result)),
           };
-          if (trackedIdentity?.toolCallId) {
-            autoApproveStore.putDecision(trackedIdentity.toolCallId, 'deny');
+          const bridgeCallId = resolveCallIdForBridge(trackedIdentity, action, event, ctx);
+          if (bridgeCallId) {
+            autoApproveStore.putDecision(bridgeCallId, 'deny');
           }
           return blocked;
         }
         return mappedDecision.value;
       } catch {
-        if (autoApproveActive && trackedIdentity?.toolCallId) {
-          autoApproveStore.putDecision(trackedIdentity.toolCallId, 'deny');
+        if (autoApproveActive) {
+          const bridgeCallId = resolveCallIdForBridge(trackedIdentity, action, event, ctx);
+          if (bridgeCallId) {
+            autoApproveStore.putDecision(bridgeCallId, 'deny');
+          }
         }
         return safeFallbackMapping(config, failure(), params);
       }

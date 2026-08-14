@@ -249,7 +249,8 @@ process-wide singleton
 5. Monkey-patch `requestApproval` при активном autoapprove:
    - `allow-once` — сразу от judge, без ожидания human/manager HITL;
    - `deny` — сразу, без human wait и без publish pending_approval;
-   - неизвестный вердикт — вызывает оригинальный bridge (fallback HITL).
+   - неизвестный вердикт после ожидания judge — `allow-once` (fail-open для
+     autoapprove), без HITL timeout.
 
 Контракт ключа singleton и формы `requestApproval({ toolName, params,
 toolCallId, runId, sessionKey, timeoutMs })` считается стабильным integration

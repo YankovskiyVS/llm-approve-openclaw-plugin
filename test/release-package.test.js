@@ -54,6 +54,7 @@ const EXPECTED_PACKAGE_FILES = [
   'src/intrinsics.js',
   'src/judge-client.js',
   'src/judge-schema.js',
+  'src/model-id.js',
   'src/plugin.js',
   'src/policy-routing.js',
   'src/prompt.js',

@@ -3,7 +3,7 @@ import { JUDGE_TIMEOUT_MS, MODEL_ID } from './constants.js';
 import { createJudgeResponseFormat } from './judge-schema.js';
 import { buildJudgeMessages } from './prompt.js';
 import { canonicalStringify } from './action.js';
-
+import { normalizeJudgeModelId } from './model-id.js';
 const INVALID_CONFIGURATION = 'invalid judge client configuration';
 const INVALID_REQUEST = 'invalid judge request';
 const INVALID_RESPONSE = 'invalid judge response';
@@ -100,18 +100,21 @@ function normalizeOptions(options) {
       || parsed.hash) return invalidConfiguration();
 
     const endpoint = `${CLOUDRU_ORIGIN}${CLOUDRU_API_PATH}/chat/completions`;
-    return { apiKey, endpoint, fetchImpl, timeoutMs };
+    const defaultModelId = normalizeJudgeModelId(options.modelId) || MODEL_ID;
+    return { apiKey, endpoint, fetchImpl, timeoutMs, defaultModelId };
   } catch {
     return invalidConfiguration();
   }
 }
 
-function responseContent(value) {
+function responseContent(value, expectedModelId) {
   try {
     if (value === null || typeof value !== 'object' || Array.isArray(value)
       || types.isProxy(value)) return undefined;
     const model = Object.getOwnPropertyDescriptor(value, 'model');
-    if (!model || !Object.hasOwn(model, 'value') || model.value !== MODEL_ID) {
+    if (!model || !Object.hasOwn(model, 'value')
+      || typeof model.value !== 'string'
+      || model.value !== expectedModelId) {
       return undefined;
     }
     const choices = value.choices;
@@ -230,7 +233,7 @@ function usageSnapshot(responseValue) {
 }
 
 export function createJudgeClient(options = {}) {
-  const { apiKey, endpoint, fetchImpl, timeoutMs } = normalizeOptions(options);
+  const { apiKey, endpoint, fetchImpl, timeoutMs, defaultModelId } = normalizeOptions(options);
 
   async function review(input) {
     const startedAt = monotonicNow();
@@ -238,14 +241,18 @@ export function createJudgeClient(options = {}) {
 
     try {
       let body;
+      let requestedModelId;
       try {
         const semanticInput = semanticInputSnapshot(input);
         const messages = buildJudgeMessages(semanticInput);
         if (containsString(semanticInput, apiKey)) {
           return failure(INVALID_REQUEST, startedAt);
         }
+        requestedModelId = normalizeJudgeModelId(
+          input && typeof input === 'object' ? input.modelId : undefined,
+        ) || defaultModelId || MODEL_ID;
         body = JSON.stringify({
-          model: MODEL_ID,
+          model: requestedModelId,
           messages,
           temperature: 0,
           max_tokens: 256,
@@ -322,7 +329,7 @@ export function createJudgeClient(options = {}) {
       }
 
       if (value === timeoutMarker) return failure(REQUEST_TIMED_OUT, startedAt);
-      const text = responseContent(value);
+      const text = responseContent(value, requestedModelId);
       if (text === undefined) return failure(INVALID_RESPONSE, startedAt);
       if (text.includes(apiKey)) return failure(INVALID_RESPONSE, startedAt);
       return {

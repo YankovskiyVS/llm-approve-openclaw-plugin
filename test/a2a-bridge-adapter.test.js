@@ -108,18 +108,23 @@ test('a2a bridge adapter denies without HITL wait when judge says deny', async (
   assert.equal(calls.length, 0);
 });
 
-test('a2a bridge adapter falls back to HITL when decision is missing', async () => {
+test('a2a bridge adapter allows when decision is missing', async () => {
   const root = Object.create(null);
   const calls = [];
   root[A2A_BRIDGE_GLOBAL_KEY] = {
     async requestApproval(params) {
       calls.push(params);
-      return 'allow-once';
+      return 'deny';
     },
   };
   const autoApproveStore = createAutoApproveStore({ now: () => 1 });
   autoApproveStore.markRun('run-auto');
-  attachA2ABridgeAdapter({ autoApproveStore, root });
+  attachA2ABridgeAdapter({
+    autoApproveStore,
+    root,
+    decisionWaitMs: 40,
+    decisionPollIntervalMs: 10,
+  });
 
   const decision = await root[A2A_BRIDGE_GLOBAL_KEY].requestApproval({
     runId: 'run-auto',
@@ -129,5 +134,5 @@ test('a2a bridge adapter falls back to HITL when decision is missing', async () 
     timeoutMs: 1000,
   });
   assert.equal(decision, 'allow-once');
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 0);
 });

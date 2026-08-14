@@ -46,20 +46,26 @@ export function createContextStore({ ttlMs, maxEntries, now } = {}) {
     }
   }
 
-  function put(runId, prompt, sessionKey) {
+  function put(runId, prompt, sessionKey, modelId) {
     assertNonBlankString(runId, 'runId');
     assertNonBlankString(prompt, 'prompt');
 
     const timestamp = now();
+    const model = typeof modelId === 'string' && modelId.trim() ? modelId.trim() : undefined;
     pruneAt(timestamp);
     byRun.delete(runId);
-    byRun.set(runId, { prompt, createdAt: timestamp });
+    byRun.set(runId, { prompt, modelId: model, createdAt: timestamp });
     evictOldest(byRun);
 
     const normalizedSession = normalizeSessionKey(sessionKey);
     if (normalizedSession) {
       bySession.delete(normalizedSession);
-      bySession.set(normalizedSession, { prompt, createdAt: timestamp, runId });
+      bySession.set(normalizedSession, {
+        prompt,
+        modelId: model,
+        createdAt: timestamp,
+        runId,
+      });
       evictOldest(bySession);
     }
   }
@@ -69,6 +75,11 @@ export function createContextStore({ ttlMs, maxEntries, now } = {}) {
     return byRun.get(runId)?.prompt;
   }
 
+  function getModel(runId) {
+    prune();
+    return byRun.get(runId)?.modelId;
+  }
+
   function getBySession(sessionKey) {
     prune();
     const normalizedSession = normalizeSessionKey(sessionKey);
@@ -76,9 +87,16 @@ export function createContextStore({ ttlMs, maxEntries, now } = {}) {
     return bySession.get(normalizedSession)?.prompt;
   }
 
+  function getModelBySession(sessionKey) {
+    prune();
+    const normalizedSession = normalizeSessionKey(sessionKey);
+    if (!normalizedSession) return undefined;
+    return bySession.get(normalizedSession)?.modelId;
+  }
+
   function size() {
     return byRun.size;
   }
 
-  return { put, get, getBySession, prune, size };
+  return { put, get, getModel, getBySession, getModelBySession, prune, size };
 }

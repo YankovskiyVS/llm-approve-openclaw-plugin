@@ -84,6 +84,7 @@ const SHIPPED_RUNTIME_FILES = new Set([
   join('src', 'intrinsics.js'),
   join('src', 'judge-client.js'),
   join('src', 'judge-schema.js'),
+  join('src', 'model-id.js'),
   join('src', 'plugin.js'),
   join('src', 'policy-routing.js'),
   join('src', 'prompt.js'),

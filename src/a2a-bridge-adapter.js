@@ -6,12 +6,18 @@
  * hook awaits `requestApproval(...)`.
  *
  * For autoapprove chats the judge is the approver: allow-once and deny are
- * returned immediately (no human / manager wait). Unknown verdicts still fall
- * back to the original HITL bridge.
+ * returned immediately (no human / manager wait). If no verdict arrives within
+ * the judge wait window, autoapprove fails open with allow-once.
  */
+
+import { JUDGE_TIMEOUT_MS } from './constants.js';
 
 export const A2A_BRIDGE_GLOBAL_KEY = '__openclaw_a2a_tool_approval_bridge_v1__';
 export const A2A_BRIDGE_WRAPPED_FLAG = '__llmActionJudgeA2aWrapped';
+
+const DECISION_POLL_INTERVAL_MS = 50;
+// Cover a full judge LLM round-trip (default 30s) plus local guard slack.
+const DECISION_WAIT_MS = JUDGE_TIMEOUT_MS + 5_000;
 
 /**
  * @param {object} options
@@ -24,6 +30,8 @@ export function attachA2ABridgeAdapter({
   autoApproveStore,
   logger = {},
   root = globalThis,
+  decisionWaitMs = DECISION_WAIT_MS,
+  decisionPollIntervalMs = DECISION_POLL_INTERVAL_MS,
 } = {}) {
   if (!autoApproveStore || typeof autoApproveStore.isActive !== 'function') {
     return { attached: false, detach() {} };
@@ -38,6 +46,10 @@ export function attachA2ABridgeAdapter({
   }
 
   const original = bridge.requestApproval.bind(bridge);
+  const waitAttempts = Math.max(
+    1,
+    Math.ceil(Math.max(0, decisionWaitMs) / Math.max(1, decisionPollIntervalMs)),
+  );
 
   async function wrappedRequestApproval(params = {}) {
     const sessionKey = typeof params.sessionKey === 'string' ? params.sessionKey : undefined;
@@ -51,12 +63,12 @@ export function attachA2ABridgeAdapter({
       return original(params);
     }
 
-    // Wait briefly for before_tool_call (priority -1000) to store the verdict.
+    // Wait for before_tool_call (priority -1000) to store the verdict.
     let decision = callId ? autoApproveStore.takeDecision(callId) : undefined;
     if (decision !== 'allow-once' && decision !== 'deny' && callId) {
       decision = await waitForBridgeDecision(autoApproveStore, callId, {
-        attempts: 40,
-        intervalMs: 25,
+        attempts: waitAttempts,
+        intervalMs: decisionPollIntervalMs,
       });
     }
 
@@ -78,13 +90,13 @@ export function attachA2ABridgeAdapter({
       return 'deny';
     }
 
-    // No judge verdict yet: keep native HITL so a human/manager can still decide.
+    // Autoapprove chats must not hang on HITL when the judge is slow/missing.
     try {
-      logger.info?.('llm-action-judge: a2a autoapprove missing verdict; falling back to HITL');
+      logger.info?.('llm-action-judge: a2a autoapprove missing verdict; allow-once');
     } catch {
       // ignore
     }
-    return original(params);
+    return 'allow-once';
   }
 
   bridge.requestApproval = wrappedRequestApproval;
@@ -106,8 +118,8 @@ export function attachA2ABridgeAdapter({
 }
 
 async function waitForBridgeDecision(store, callId, {
-  attempts = 40,
-  intervalMs = 25,
+  attempts = 1,
+  intervalMs = DECISION_POLL_INTERVAL_MS,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
   for (let i = 0; i < attempts; i += 1) {

@@ -68,7 +68,7 @@ test('production judge model is the fixed selection winner', () => {
   assert.equal(MODEL_ID, 'Qwen/Qwen3.5-397B-A17B');
 });
 
-test('accepts only a response explicitly attributed to the requested fixed model', async () => {
+test('accepts only a response explicitly attributed to the requested model', async () => {
   const invalidModels = [
     undefined,
     null,
@@ -88,6 +88,36 @@ test('accepts only a response explicitly attributed to the requested fixed model
     })).review({ userPrompt: USER_PROMPT, envelope: ENVELOPE });
     assertSafeFailure(result, { reason: 'invalid judge response' });
   }
+});
+
+test('uses the agent model id for judge requests when provided', async () => {
+  const agentModel = 'Qwen/Qwen3.6-35B-A3B';
+  let body;
+  const client = createJudgeClient({
+    providerConfig: {
+      baseUrl: 'https://foundation-models.api.cloud.ru/v1',
+      apiKey: 'ordinary-test-key',
+    },
+    modelId: 'cloudru/Qwen/Qwen3.6-35B-A3B',
+    fetchImpl: async (_url, options) => {
+      body = JSON.parse(options.body);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          model: agentModel,
+          choices: [{ finish_reason: 'stop', message: { content: CONTENT } }],
+        }),
+      };
+    },
+  });
+  const result = await client.review({
+    userPrompt: USER_PROMPT,
+    envelope: ENVELOPE,
+    modelId: 'cloudru/Qwen/Qwen3.6-35B-A3B',
+  });
+  assert.equal(result.ok, true);
+  assert.equal(body.model, agentModel);
 });
 
 test('sends the exact fixed Cloud.ru request through the injected fetch', async () => {
