@@ -17,7 +17,7 @@ if (!packageRoot || !stateDir) {
   const packageMetadata = JSON.parse(
     await fs.readFile(path.resolve(packageRoot, 'package.json'), 'utf8'),
   );
-  assert.equal(packageMetadata.version, '0.5.0');
+  assert.equal(packageMetadata.version, '0.5.1');
   assert.equal(POLICY_VERSION, '2026-07-16.1');
   const auditPath = path.join(stateDir, 'logs', 'integration.jsonl');
   const fixtureKey = 'runtime-smoke-key-v050';

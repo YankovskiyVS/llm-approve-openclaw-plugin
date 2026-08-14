@@ -97,10 +97,10 @@ async function tarEntries(tarballPath) {
   return stdout.trim().split('\n').filter(Boolean);
 }
 
-test('package metadata pins the internal 0.5.0 release contract and lean runtime dependencies', async () => {
+test('package metadata pins the internal 0.5.1 release contract and lean runtime dependencies', async () => {
   const metadata = JSON.parse(await fs.readFile(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'));
 
-  assert.equal(metadata.version, '0.5.0');
+  assert.equal(metadata.version, '0.5.1');
   assert.equal(metadata.private, true);
   assert.equal(metadata.license, 'UNLICENSED');
   assert.deepEqual(metadata.repository, {
@@ -109,12 +109,12 @@ test('package metadata pins the internal 0.5.0 release contract and lean runtime
   });
   assert.deepEqual(metadata.engines, { node: '>=22.19.0' });
   assert.deepEqual(metadata.dependencies, { ajv: '8.20.0' });
-  assert.deepEqual(metadata.peerDependencies, { openclaw: '>=2026.4.21' });
+  assert.deepEqual(metadata.peerDependencies, { openclaw: '>=2026.7.1-2' });
   assert.deepEqual(metadata.peerDependenciesMeta, { openclaw: { optional: true } });
   assert.deepEqual(metadata.openclaw, {
     extensions: ['./index.js'],
-    install: { minHostVersion: '>=2026.4.21' },
-    compat: { pluginApi: '>=2026.4.21' },
+    install: { minHostVersion: '>=2026.7.1-2' },
+    compat: { pluginApi: '>=2026.7.1-2' },
   });
   assert.deepEqual(metadata.files, EXPECTED_FILES_FIELD);
   assert.equal(metadata.scripts.test, 'node --test');
@@ -126,7 +126,7 @@ test('package metadata pins the internal 0.5.0 release contract and lean runtime
 test('npm pack dry-run has the exact reviewed release file set', async () => {
   const packed = await npmPackDryRun();
 
-  assert.equal(packed.filename, 'openclaw-llm-action-judge-0.5.0.tgz');
+  assert.equal(packed.filename, 'openclaw-llm-action-judge-0.5.1.tgz');
   assert.deepEqual(packed.files.map((entry) => entry.path).sort(), EXPECTED_PACKAGE_FILES);
   assert.equal(packed.files.some((entry) => /(?:^|\/)(?:evals?|tests?|reviews?)(?:\/|$)/u.test(entry.path)), false);
   assert.equal(packed.files.some((entry) => path.isAbsolute(entry.path) || entry.path.split('/').includes('..')), false);
@@ -138,7 +138,7 @@ test('release builder publishes one versioned tarball and matching sha256 into a
   const outputDir = path.join(temporary, 'release');
 
   const result = await buildRelease({ packageRoot: PACKAGE_ROOT, outputDir });
-  const tarballName = 'openclaw-llm-action-judge-0.5.0.tgz';
+  const tarballName = 'openclaw-llm-action-judge-0.5.1.tgz';
   const checksumName = `${tarballName}.sha256`;
   const tarballPath = path.join(outputDir, tarballName);
   const checksumPath = path.join(outputDir, checksumName);
@@ -169,13 +169,13 @@ test('release builder publishes one versioned tarball and matching sha256 into a
     await fs.readFile(path.join(extracted, 'package', 'package.json'), 'utf8'),
   );
   assert.equal(Object.hasOwn(runtimeMetadata, 'scripts'), false);
-  assert.equal(runtimeMetadata.version, '0.5.0');
+  assert.equal(runtimeMetadata.version, '0.5.1');
   assert.deepEqual(runtimeMetadata.dependencies, { ajv: '8.20.0' });
   assert.deepEqual(runtimeMetadata.peerDependenciesMeta, { openclaw: { optional: true } });
   assert.deepEqual(runtimeMetadata.openclaw, {
     extensions: ['./index.js'],
-    install: { minHostVersion: '>=2026.4.21' },
-    compat: { pluginApi: '>=2026.4.21' },
+    install: { minHostVersion: '>=2026.7.1-2' },
+    compat: { pluginApi: '>=2026.7.1-2' },
   });
   const [sourceSchema, packagedSchema] = await Promise.all([
     fs.readFile(path.join(PACKAGE_ROOT, 'schemas', 'judge-verdict.schema.json'), 'utf8'),
@@ -301,7 +301,7 @@ test('runtime smoke pins v0.5 and fails closed for schema-invalid judge output',
     await fs.readFile(path.join(runtimePackageRoot, 'package.json'), 'utf8'),
   );
   assert.equal(installedMetadata.name, 'openclaw-llm-action-judge');
-  assert.equal(installedMetadata.version, '0.5.0');
+  assert.equal(installedMetadata.version, '0.5.1');
   const canonicalNodeModules = await fs.realpath(path.join(consumerDir, 'node_modules'));
   for (const [name, version] of Object.entries(expectedRuntimeDependencies)) {
     const dependencyRoot = path.join(consumerDir, 'node_modules', name);
@@ -327,7 +327,7 @@ test('runtime smoke pins v0.5 and fails closed for schema-invalid judge output',
 
   assert.deepEqual(JSON.parse(stdout), {
     schemaVersion: 2,
-    packageVersion: '0.5.0',
+    packageVersion: '0.5.1',
     hooks: ['before_model_resolve', 'before_tool_call'],
     safeAllow: true,
     deterministicGuardBlock: true,
@@ -517,8 +517,8 @@ test('concurrent release builds publish once without replacing the winner', asyn
   assert.equal(results.filter(({ status }) => status === 'rejected').length, 1);
   const entries = await fs.readdir(outputDir);
   assert.deepEqual(entries.sort(), [
-    'openclaw-llm-action-judge-0.5.0.tgz',
-    'openclaw-llm-action-judge-0.5.0.tgz.sha256',
+    'openclaw-llm-action-judge-0.5.1.tgz',
+    'openclaw-llm-action-judge-0.5.1.tgz.sha256',
   ].sort());
 });
 
