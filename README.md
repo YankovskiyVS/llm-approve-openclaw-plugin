@@ -1,9 +1,76 @@
 # OpenClaw LLM Action Judge
 
-Плагин `openclaw-llm-action-judge` версии `0.5.0` проверяет каждый proposed tool
+Плагин `openclaw-llm-action-judge` версии `0.5.1` проверяет каждый proposed tool
 call отдельной фиксированной LLM **до исполнения**. Низкорисковое и явно
 разрешённое действие может пройти автоматически, сомнительное — запросить
 подтверждение, опасное — быть заблокировано.
+
+## Подключение в общий стек OpenClaw 2026.7.1-2
+
+В проверенной конфигурации этот репозиторий находится рядом с
+`openclaw-a2a-gateway` и `nango-openclaw-plugin` на ветке
+`openclaw-2026.7.1-2`.
+
+Judge загружается как внешний плагин:
+
+```json
+{
+  "plugins": {
+    "allow": [
+      "a2a-gateway",
+      "browser",
+      "diagnostics-otel",
+      "llm-action-judge",
+      "nango-proxy"
+    ],
+    "load": {
+      "paths": [
+        "/opt/openclaw-stack/openclaw-a2a-gateway",
+        "/opt/openclaw-stack/llm-approve-openclaw-plugin",
+        "/opt/openclaw-stack/nango-openclaw-plugin"
+      ]
+    },
+    "entries": {
+      "llm-action-judge": {
+        "enabled": true,
+        "hooks": {
+          "allowConversationAccess": true
+        },
+        "config": {
+          "mode": "supervised",
+          "enforcement": "enforce"
+        }
+      }
+    }
+  }
+}
+```
+
+В Docker репозиторий монтировался read-only в `/plugins/judge`; этот путь
+указывается в контейнерном `plugins.load.paths`.
+
+Gateway-процесс должен получить:
+
+```dotenv
+OPENCLAW_JUDGE_API_KEY=<secret>
+OPENCLAW_JUDGE_PROFILE=supervised
+OPENCLAW_JUDGE_A2A_HITL_REPLACE=false
+OPENCLAW_JUDGE_MODEL_ID=Qwen/Qwen3.5-397B-A17B
+```
+
+`hooks.allowConversationAccess=true` нужен, чтобы `before_model_resolve` и
+`before_tool_call` видели trusted user request. Первый rollout выполняйте с
+`enforcement=shadow`, проверьте `logs/llm-action-judge.jsonl`, затем
+осознанно переходите на `enforce`.
+
+В общем стеке A2A HITL включён
+(`plugins.entries.a2a-gateway.config.toolApproval.enabled=true`). Judge передаёт
+`review`/technical failure в native pending approval; A2A применяет approval
+только к mutation/destructive/external/resource-creation tools. Passive Nango
+list/get/read проходят без mutation approval.
+
+Полная схема портов, mounts, общей конфигурации и end-to-end проверки находится
+в [инструкции five-plugin stack](https://github.com/YankovskiyVS/openclaw-a2a-gateway/blob/openclaw-2026.7.1-2/docs/FIVE_PLUGIN_STACK_RU.md).
 
 ## Суть решения
 
@@ -66,7 +133,7 @@ OpenClaw и на host без native sandbox может означать gateway 
 
 ## Требования
 
-- OpenClaw `>=2026.4.21`; тот же floor исполняется package metadata через
+- OpenClaw `>=2026.7.1-2`; тот же floor исполняется package metadata через
   `openclaw.install.minHostVersion` и `openclaw.compat.pluginApi`;
 - Node.js `>=22.19.0`;
 - доступ к `https://foundation-models.api.cloud.ru/v1`;
@@ -79,7 +146,19 @@ OpenClaw и на host без native sandbox может означать gateway 
 
 ## Установка
 
-Команды выполняются из каталога `releases/v0.5.0`:
+Для source-версии `0.5.1` из ветки совместимости:
+
+```bash
+git checkout openclaw-2026.7.1-2
+npm ci
+openclaw plugins install --link .
+```
+
+Либо добавьте абсолютный путь репозитория в `plugins.load.paths`, как показано
+в разделе общего стека выше.
+
+Последний подготовленный package artifact — `0.5.0`. Следующие команды
+выполняются из каталога `releases/v0.5.0`:
 
 ```bash
 shasum -a 256 -c openclaw-llm-action-judge-0.5.0.tgz.sha256
@@ -180,6 +259,10 @@ openclaw gateway run
 ## Переменные окружения
 
 | Переменная | Обязательность и значение | За что отвечает |
+| `OPENCLAW_JUDGE_MODEL_ID` | Необязательно; default `Qwen/Qwen3.5-397B-A17B` | Отдельная модель Judge. Не наследуется от основного агента; выбранная модель и fallback reason логируются. |
+| `OPENCLAW_JUDGE_BREAKER_TTL_MS` | Необязательно; default `1800000` | TTL breaker scope `runId + userTurnId + toolFamily`. |
+| `OPENCLAW_JUDGE_BREAKER_CONSECUTIVE_DENY_LIMIT` | Необязательно; default `3` | Порог последовательных policy deny внутри одного scope. |
+| `OPENCLAW_JUDGE_BREAKER_ROLLING_DENY_LIMIT` | Необязательно; default `10` | Порог policy deny в последних 50 решениях одного scope. |
 |---|---|---|
 | `OPENCLAW_JUDGE_API_KEY` | Рекомендуется; `1..4096` printable ASCII chars, без пробелов | Отдельный Cloud.ru API key судьи. Если переменная отсутствует, плагин использует exact `models.providers.cloudru` из OpenClaw. Пустая строка не допускается. |
 | `OPENCLAW_JUDGE_PROFILE` | Рекомендуется: `shadow`, `supervised`, `autonomous` | Одновременно задаёт режим и enforcement. Имеет приоритет над валидным legacy config; malformed legacy config всё равно нужно исправить или удалить. |
@@ -189,10 +272,10 @@ openclaw gateway run
 | `OPENCLAW_JUDGE_LOG_LEVEL` | Необязательно: `error`, `warn`, `info`, `silent`; default `info` | Управляет operational-логами плагина. На решения judge и JSONL audit не влияет. |
 | `OPENCLAW_JUDGE_A2A_HITL_REPLACE` | Необязательно: `0`/`1`/`true`/`false`; default off | Agent Space: без control marker не гейтить tool calls (чистый human HITL через a2a-gateway); с marker — LLM заменяет человека через monkey-patch bridge. |
 
-Не создавайте переменные вроде `OPENCLAW_JUDGE_MODEL`,
-`OPENCLAW_JUDGE_POLICY` или `OPENCLAW_JUDGE_PROMPT`: неизвестная переменная с
-префиксом `OPENCLAW_JUDGE_` считается ошибкой. Model, policy, prompt, threshold и
-guard зафиксированы внутри версии плагина.
+Не используйте устаревшую `OPENCLAW_JUDGE_MODEL`: поддерживается только
+`OPENCLAW_JUDGE_MODEL_ID`. `OPENCLAW_JUDGE_POLICY` и `OPENCLAW_JUDGE_PROMPT`
+остаются запрещены; неизвестная переменная с префиксом `OPENCLAW_JUDGE_`
+считается ошибкой конфигурации.
 
 Любая ошибка конфигурации не останавливает gateway: hooks остаются
 зарегистрированы, а plugin переходит в permanent `supervised + enforce` с
@@ -203,6 +286,23 @@ failing client. Каждый tool call тогда требует native approval
 `plugins.entries.llm-action-judge.config`; его code default —
 `mode=autonomous, enforcement=shadow`. Для предсказуемого deployment всегда
 задавайте profile явно.
+
+## Ограничения интеграции
+
+- `web_fetch` реализован OpenClaw runtime, а не этими тремя плагинами. Поэтому
+  распознавание Cloudflare challenge как `WEB_FETCH_CHALLENGE`, удаление сырого
+  HTML и автоматический browser fallback должны быть добавлены в Browser/Web
+  runtime. Firecrawl намеренно не добавляется без исходников и ключа.
+- A2A task/message dedupe использует durable task store. Exact mutation
+  `actionHash` резервируется process-wide до tool execution; для exactly-once
+  после аварийного restart нужен внешний idempotency key в Nango/provider либо
+  durable action ledger OpenClaw runtime.
+- Ouroboros запускает plugins в разных процессах и не разделяет A2A bridge через
+  `globalThis`. До появления operator-managed approval surface risky action
+  должен завершаться `approval_unavailable`; включать silent allow запрещено.
+- `createRunDecisionStore().reset(runId, userTurnId?, toolFamily?)` доступен
+  доверенному in-process операторскому коду. Публичный gateway reset намеренно
+  не регистрируется без отдельной аутентизации/авторизации operator API.
 
 ## Как проверить, что всё работает
 

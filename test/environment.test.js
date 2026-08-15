@@ -55,6 +55,12 @@ test('uses detached immutable legacy defaults and shared provider', () => {
     timeoutMs: JUDGE_TIMEOUT_MS,
     auditPath: '/home/tester/.openclaw/logs/llm-action-judge.jsonl',
     auditRoot: '/home/tester/.openclaw/logs',
+    judgeModelId: 'Qwen/Qwen3.5-397B-A17B',
+    judgeModelSource: 'default',
+    judgeModelFallbackReason: 'OPENCLAW_JUDGE_MODEL_ID_not_set',
+    breakerTtlMs: 1_800_000,
+    breakerConsecutiveDenyLimit: 3,
+    breakerRollingDenyLimit: 10,
     logLevel: 'info',
     a2aHitlReplace: false,
   });

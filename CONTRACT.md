@@ -23,6 +23,10 @@ plugin hooks.
 |---|---|---|---|
 | `OPENCLAW_JUDGE_API_KEY` | рекомендуется | shared provider fallback | Printable ASCII без whitespace, 1–4096 chars. |
 | `OPENCLAW_JUDGE_PROFILE` | рекомендуется | legacy config, затем `shadow` | `shadow`, `supervised`, `autonomous`. |
+| `OPENCLAW_JUDGE_MODEL_ID` | нет | `Qwen/Qwen3.5-397B-A17B` | Отдельная модель Judge, без наследования agent model. |
+| `OPENCLAW_JUDGE_BREAKER_TTL_MS` | нет | `1800000` | TTL scope `runId + userTurnId + toolFamily`. |
+| `OPENCLAW_JUDGE_BREAKER_CONSECUTIVE_DENY_LIMIT` | нет | `3` | Canonical positive integer, максимум 50. |
+| `OPENCLAW_JUDGE_BREAKER_ROLLING_DENY_LIMIT` | нет | `10` | Canonical positive integer, максимум 50. |
 | `OPENCLAW_JUDGE_BASE_URL` | нет | fixed Cloud.ru URL | Только `https://foundation-models.api.cloud.ru/v1`. |
 | `OPENCLAW_JUDGE_TIMEOUT_MS` | нет | `30000` | Canonical integer `1000..30000`. |
 | `OPENCLAW_JUDGE_AUDIT_PATH` | нет | OpenClaw logs path | Absolute `.jsonl` внутри OpenClaw logs root. |
@@ -243,15 +247,14 @@ process-wide singleton
    `metadata.llm.autoApprove=true`;
 2. `before_model_resolve` снимает marker с trusted prompt и помечает `runId` /
    `sessionKey`;
-3. При `OPENCLAW_JUDGE_A2A_HITL_REPLACE=true` обычный `before_tool_call` **не
-   гейтит** tool calls без marker — остаётся чистый human HITL;
-4. С marker judge исполняется, решение кладётся в store по `toolCallId`,
-   native `requireApproval` на A2A-пути не используется (review/failure → deny);
-5. Monkey-patch `requestApproval` при активном autoapprove:
-   - `allow-once` — сразу от judge, без ожидания human/manager HITL;
-   - `deny` — сразу, без human wait и без publish pending_approval;
-   - неизвестный вердикт после ожидания judge — `allow-once` (fail-open для
-     autoapprove), без HITL timeout.
+3. Рекомендуемый режим — `OPENCLAW_JUDGE_A2A_HITL_REPLACE=false`: Judge
+   оценивает вызов, а `review` и technical failure передаёт native A2A HITL;
+4. При совместимом marker-flow Judge кладёт `allow-once`, `deny` либо
+   `require-approval` по `toolCallId`; `require-approval` вызывает исходный bridge;
+5. Отсутствующая approval surface возвращает `approval_unavailable`. Mutation
+   никогда не получает silent allow. A2A связывает approval с `userTurnId`,
+   tool name, canonical params, session/context и `actionHash`; retry точного
+   действия не выполняется повторно.
 
 Контракт ключа singleton и формы `requestApproval({ toolName, params,
 toolCallId, runId, sessionKey, timeoutMs })` считается стабильным integration

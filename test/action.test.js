@@ -283,7 +283,7 @@ test('action hash is an opaque process-local binding, not an offline-checkable p
   );
 });
 
-test('createJudgeEnvelope exposes only the hash, tool, policy, and redacted params', () => {
+test('createJudgeEnvelope exposes hash, tool, capability, policy, and redacted params', () => {
   const secrets = ['judge-token-fixture-84c', 'judge-env-fixture-95d'];
   const action = createAction({
     event: {
@@ -310,6 +310,7 @@ test('createJudgeEnvelope exposes only the hash, tool, policy, and redacted para
     'policy_version',
     'action_hash',
     'tool_name',
+    'capability',
     'params',
   ]);
   assert.equal(envelope.policy_version, POLICY_VERSION);

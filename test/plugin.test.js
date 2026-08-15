@@ -541,7 +541,7 @@ test('safe candidate disagreement observes the post-normalization local downgrad
   assert.equal(harness.auditEvents[0].safe_path_disagreement, true);
 });
 
-test('pre-tripped shadow run still measures a safe candidate before circuit-breaker override', async () => {
+test('pre-tripped unrelated family does not block a safe candidate', async () => {
   const decisionStore = runDecisionStore();
   tripDecisionStore(decisionStore, 'run-shadow-tripped');
   const client = verdictClient();
@@ -555,8 +555,8 @@ test('pre-tripped shadow run still measures a safe candidate before circuit-brea
 
   assert.equal(await harness.beforeTool(call.event, call.ctx), undefined);
   assert.equal(client.calls.length, 1);
-  assert.equal(harness.auditEvents[0].decision_source, 'circuit_breaker');
-  assert.equal(harness.auditEvents[0].outcome, 'deny');
+  assert.equal(harness.auditEvents[0].decision_source, 'llm');
+  assert.equal(harness.auditEvents[0].outcome, 'allow');
   assert.equal(harness.auditEvents[0].safe_path_candidate, true);
   assert.equal(harness.auditEvents[0].safe_path_family, 'session_status_current');
   assert.equal(harness.auditEvents[0].safe_path_disagreement, false);
@@ -2277,6 +2277,7 @@ test('dedicated ENV settings reach factories without reading shared provider', (
       apiKey: API_SECRET,
     },
     timeoutMs: 1000,
+    modelId: 'Qwen/Qwen3.5-397B-A17B',
   });
   assert.equal(received.audit.filePath, '/state/logs/team/judge.jsonl');
   assert.equal(received.audit.rootPath, '/state/logs');
@@ -2434,7 +2435,9 @@ test('info log level emits one fixed registration message without runtime values
     logger,
   });
 
-  assert.deepEqual(messages, [['info', 'LLM action judge registered']]);
+  assert.equal(messages.length, 2);
+  assert.match(messages[0][1], /^llm-action-judge: model=/u);
+  assert.deepEqual(messages[1], ['info', 'LLM action judge registered']);
   assert.equal(JSON.stringify(messages).includes(API_SECRET), false);
 });
 
@@ -2476,6 +2479,7 @@ test('uses api.config.models.providers.cloudru with the default timeout', () => 
 
   assert.equal(harness.registrations.length, 2);
   assert.deepEqual(received, {
+    modelId: 'Qwen/Qwen3.5-397B-A17B',
     providerConfig,
     timeoutMs: 30_000,
   });
@@ -2947,7 +2951,7 @@ test('process-local stores keep trusted intent across plugin re-registration', a
   delete globalThis.__openclaw_llm_action_judge_stores_v1__;
 });
 
-test('autoapprove fails open on technical judge failure without trusted prompt', async () => {
+test('autoapprove delegates technical judge failure to native approval without trusted prompt', async () => {
   const store = {
     put() {},
     get() { return undefined; },
@@ -2976,8 +2980,8 @@ test('autoapprove fails open on technical judge failure without trusted prompt',
   const call = callData('chatcmpl_missing', { path: '/tmp/status' });
   call.ctx.sessionKey = 'agent:main:a2a:ctx';
   const result = await harness.beforeTool(call.event, call.ctx);
-  // Autoapprove fail-opens technical judge failures so tools are not blocked
-  // after A2A already allowed the call.
+  // Judge delegates technical failures so the lower-priority A2A approval hook
+  // can pause the exact action; this hook does not return allow or deny.
   assert.deepEqual(result.params, { path: '/tmp/status' });
   assert.equal(result.block, undefined);
 });

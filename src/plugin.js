@@ -333,10 +333,10 @@ function decisionStoreMethod(store, name) {
   }
 }
 
-function readDecisionStoreTrip(store, runId) {
+function readDecisionStoreTrip(store, runId, userTurnId, toolFamily) {
   const isTripped = decisionStoreMethod(store, 'isTripped');
   if (!isTripped) return invalidDecisionStore();
-  const value = REFLECT_APPLY(isTripped, store, [runId]);
+  const value = REFLECT_APPLY(isTripped, store, [runId, userTurnId, toolFamily]);
   if (value === true || value === false) return value;
   suppressRejection(value);
   return invalidDecisionStore();
@@ -387,11 +387,11 @@ function metadataAllowsNewTrip(metadata) {
   }
 }
 
-function recordRunDecision(store, runId, metadata) {
+function recordRunDecision(store, runId, userTurnId, metadata) {
   const record = decisionStoreMethod(store, 'record');
   if (!record) return invalidDecisionStore();
   const allowsNewTrip = metadataAllowsNewTrip(metadata);
-  const value = REFLECT_APPLY(record, store, [runId, metadata]);
+  const value = REFLECT_APPLY(record, store, [runId, metadata, userTurnId]);
   const snapshot = decisionStatusSnapshot(value);
   if (snapshot && (!snapshot.newly_tripped || allowsNewTrip)) return snapshot;
   suppressRejection(value);
@@ -830,7 +830,7 @@ function sessionKeyFromHook(event, ctx) {
 
 function bridgeDecisionFromMapped(mapped) {
   if (mapped && mapped.block === true) return 'deny';
-  if (mapped && mapped.requireApproval) return 'deny';
+  if (mapped && mapped.requireApproval) return 'require-approval';
   if (mapped && mapped.params !== undefined && !mapped.block) return 'allow-once';
   return 'deny';
 }
@@ -914,6 +914,12 @@ export function createActionJudgePlugin(deps = {}) {
       api,
       settingsValid ? settings.logLevel : 'error',
     );
+    if (settingsValid) {
+      lifecycleLogger.info(
+        `llm-action-judge: model=${settings.judgeModelId} source=${settings.judgeModelSource}`
+          + ` fallback_reason=${settings.judgeModelFallbackReason || 'none'}`,
+      );
+    }
 
     let store = injectedStore;
     if (store === undefined) {
@@ -947,11 +953,13 @@ export function createActionJudgePlugin(deps = {}) {
             throw new TypeError('invalid decision store factory');
           }
           decisionStore = decisionStoreFactory({
-            ttlMs: STORE_TTL_MS,
+            ttlMs: settingsValid ? settings.breakerTtlMs : STORE_TTL_MS,
             maxRuns: STORE_MAX_ENTRIES,
             historyLimit: DECISION_STORE_HISTORY_LIMIT,
-            consecutiveDenyLimit: DECISION_STORE_CONSECUTIVE_DENY_LIMIT,
-            rollingDenyLimit: DECISION_STORE_ROLLING_DENY_LIMIT,
+            consecutiveDenyLimit: settingsValid
+              ? settings.breakerConsecutiveDenyLimit : DECISION_STORE_CONSECUTIVE_DENY_LIMIT,
+            rollingDenyLimit: settingsValid
+              ? settings.breakerRollingDenyLimit : DECISION_STORE_ROLLING_DENY_LIMIT,
             now: Date.now,
           });
           bag.decisionStore = decisionStore;
@@ -975,7 +983,7 @@ export function createActionJudgePlugin(deps = {}) {
         client = clientFactory({
           providerConfig: settings.providerConfig,
           timeoutMs: settings.timeoutMs,
-          ...(agentDefaultModelId ? { modelId: agentDefaultModelId } : {}),
+          modelId: settings.judgeModelId,
         });
       } catch {
         client = failingClient();
@@ -1085,6 +1093,7 @@ export function createActionJudgePlugin(deps = {}) {
       let assessingRoute = false;
       let mappedDecision;
       let autoApproveActive = false;
+      let breakerScope;
 
       try {
         const identity = identitySnapshot(event, ctx);
@@ -1101,7 +1110,15 @@ export function createActionJudgePlugin(deps = {}) {
         if (boundedDecisionIdentity(identity)) {
           trackedIdentity = identity;
           try {
-            const alreadyTripped = readDecisionStoreTrip(decisionStore, identity.runId);
+          breakerScope = {
+            runId: identity.runId,
+            userTurnId: getStoredUserTurnId(store, identity.runId, sessionKey),
+            toolFamily: classifyToolFamily(identity.toolName),
+          };
+            const alreadyTripped = readDecisionStoreTrip(
+              decisionStore, breakerScope.runId, breakerScope.userTurnId,
+              breakerScope.toolFamily,
+            );
             if (alreadyTripped) {
               result = repeatedDenials();
               decisionSource = 'circuit_breaker';
@@ -1188,8 +1205,7 @@ export function createActionJudgePlugin(deps = {}) {
                 reviewed = await Promise.resolve().then(() => review.call(client, {
                   userPrompt,
                   envelope,
-                  modelId: getStoredModelId(store, identity.runId, sessionKey)
-                    || resolveHookModelId(event, ctx, agentDefaultModelId),
+                  modelId: settings.judgeModelId,
                 }));
               } catch {
                 result = failure('judge_unavailable');
@@ -1300,7 +1316,10 @@ export function createActionJudgePlugin(deps = {}) {
         if (trackedIdentity !== undefined && !decisionStoreCheckFailed
           && !shadowAssessmentFailure) {
           try {
-            if (readDecisionStoreTrip(decisionStore, trackedIdentity.runId)) {
+            if (readDecisionStoreTrip(
+              decisionStore, breakerScope.runId, breakerScope.userTurnId,
+              breakerScope.toolFamily,
+            )) {
               result = repeatedDenials();
               decisionSource = 'circuit_breaker';
             }
@@ -1338,8 +1357,17 @@ export function createActionJudgePlugin(deps = {}) {
           const recordStatus = recordRunDecision(
             decisionStore,
             trackedIdentity.runId,
+            breakerScope.userTurnId,
             decisionMetadata(trackedIdentity, result, judgeResult),
           );
+          if (recordStatus.newly_tripped) {
+            lifecycleLogger.warn(
+              'llm-action-judge: breaker_open runId=' + breakerScope.runId
+                + ' userTurnId=' + breakerScope.userTurnId
+                + ' toolFamily=' + breakerScope.toolFamily
+                + ' reason=policy_deny threshold=consecutive_or_rolling',
+            );
+          }
           if (recordStatus.already_tripped
             && !(routeAssessmentFailed && config.enforcement === 'shadow')
             && decisionSource !== 'circuit_breaker') {
@@ -1363,6 +1391,14 @@ export function createActionJudgePlugin(deps = {}) {
 
       if (safePathCandidate && decisionSource !== 'circuit_breaker') {
         safePathDisagreement = result.kind !== 'allow';
+      }
+
+      if (isTechnicalJudgeFailure(result)) {
+        lifecycleLogger.warn(
+          'llm-action-judge: judge_error code=' + selectFeedbackCode(result)
+            + ' model=' + (settingsValid ? settings.judgeModelId : 'unavailable')
+            + ' breaker_increment=false',
+        );
       }
 
       try {
@@ -1389,22 +1425,28 @@ export function createActionJudgePlugin(deps = {}) {
           };
         }
         if (autoApproveActive) {
-          // Technical judge failures must not block autoapprove tools: the A2A
-          // bridge already fail-opens to allow-once, and a mid-run plugin reload
-          // can leave the gate without trusted intent / a valid LLM verdict.
+          // Technical judge failures require native approval. The lower-priority A2A
+          // bridge owns the HITL wait; evaluator failures never increment policy
+          // denial counters and never fail open.
           if (
             (mappedDecision.value?.block === true || mappedDecision.value?.requireApproval)
             && isTechnicalJudgeFailure(result)
           ) {
             mappedDecision = {
-              value: autoApproveFailOpen(params),
+              value: {
+                requireApproval: {
+                  description: 'Judge unavailable; native approval is required',
+                  timeoutMs: APPROVAL_TIMEOUT_MS,
+                  timeoutBehavior: 'deny',
+                },
+              },
               effectiveResult: result,
               effectiveDecisionSource: decisionSource,
               fellBack: true,
             };
             try {
               lifecycleLogger.info(
-                'llm-action-judge: a2a autoapprove technical failure; allow',
+                'llm-action-judge: technical failure; native approval required',
               );
             } catch {
               // ignore logger failures
@@ -1418,29 +1460,18 @@ export function createActionJudgePlugin(deps = {}) {
             );
           }
         }
-        // For A2A autoapprove: never use native requireApproval (A2A ignores it).
-        // Allow continues so the patched bridge can return allow-once; deny blocks.
+        // Continue to the lower-priority A2A hook; it owns the blocking HITL wait.
         if (autoApproveActive && mappedDecision.value?.requireApproval) {
-          const blocked = {
-            block: true,
-            blockReason: mappedDecision.value.requireApproval.description
-              || createBlockFeedback(selectFeedbackCode(result)),
-          };
-          const bridgeCallId = resolveCallIdForBridge(trackedIdentity, action, event, ctx);
-          if (bridgeCallId) {
-            autoApproveStore.putDecision(bridgeCallId, 'deny');
-          }
-          return blocked;
+          return { params };
         }
         return mappedDecision.value;
       } catch {
         if (autoApproveActive) {
           const bridgeCallId = resolveCallIdForBridge(trackedIdentity, action, event, ctx);
-          const allowed = autoApproveFailOpen(params);
           if (bridgeCallId) {
-            autoApproveStore.putDecision(bridgeCallId, 'allow-once');
+            autoApproveStore.putDecision(bridgeCallId, 'require-approval');
           }
-          return allowed;
+          return { params };
         }
         return safeFallbackMapping(config, failure(), params);
       }
@@ -1481,4 +1512,21 @@ export function createActionJudgePlugin(deps = {}) {
     description: PLUGIN_DESCRIPTION,
     register,
   };
+}
+
+function getStoredUserTurnId(store, runId, sessionKey) {
+  try {
+    const get = methodValue(store, 'get');
+    if (get && typeof runId === 'string') {
+      const value = get.call(store, runId);
+      if (typeof value === 'string') return runId;
+      suppressRejection(value);
+    }
+    const getRunIdBySession = methodValue(store, 'getRunIdBySession');
+    if (getRunIdBySession && typeof sessionKey === 'string' && sessionKey.trim()) {
+      const value = getRunIdBySession.call(store, sessionKey);
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+  } catch { /* fall through to current run */ }
+  return runId;
 }

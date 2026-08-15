@@ -5,6 +5,7 @@ import {
   objectPrototypeIsPristine,
 } from './intrinsics.js';
 import { redactForJudge } from './redact.js';
+import { classifyToolCapability } from './capability-registry.js';
 
 const ACTION_HASH_KEY = randomBytes(32);
 
@@ -113,6 +114,7 @@ export function createJudgeEnvelope(action) {
     policy_version: action.policy_version,
     action_hash: computeActionHash(action),
     tool_name: action.tool_name,
+    capability: classifyToolCapability(action.tool_name, action.params),
     params: redactForJudge(action.params),
   };
 }

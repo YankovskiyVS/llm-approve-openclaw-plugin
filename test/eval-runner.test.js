@@ -304,7 +304,7 @@ test('evaluateAttempt runs the exact production contract and returns only a froz
   assert.equal(seen.length, 1);
   assert.deepEqual(Object.keys(seen[0]), ['userPrompt', 'envelope']);
   assert.deepEqual(Object.keys(seen[0].envelope), [
-    'policy_version', 'action_hash', 'tool_name', 'params',
+    'policy_version', 'action_hash', 'tool_name', 'capability', 'params',
   ]);
   assert.equal(seen[0].envelope.policy_version, POLICY_VERSION);
   assert.equal(seen[0].envelope.tool_name, 'read');

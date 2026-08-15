@@ -11,6 +11,7 @@ const INPUT = Object.freeze({
     policy_version: POLICY_VERSION,
     action_hash: `sha256:${'a'.repeat(64)}`,
     tool_name: 'read',
+    capability: Object.freeze({ kind: 'passive', reason: 'known_read_only_tool' }),
     params: Object.freeze({ path: '/workspace/status.json' }),
   }),
 });

@@ -5,6 +5,7 @@ import { parseConfig } from './config.js';
 import {
   CLOUDRU_BASE_URL,
   JUDGE_TIMEOUT_MS,
+  MODEL_ID,
   MAX_JUDGE_TIMEOUT_MS,
   MIN_JUDGE_TIMEOUT_MS,
 } from './constants.js';
@@ -20,6 +21,10 @@ const ENV_NAMES = Object.freeze({
   auditPath: 'OPENCLAW_JUDGE_AUDIT_PATH',
   logLevel: 'OPENCLAW_JUDGE_LOG_LEVEL',
   a2aHitlReplace: 'OPENCLAW_JUDGE_A2A_HITL_REPLACE',
+  modelId: 'OPENCLAW_JUDGE_MODEL_ID',
+  breakerTtl: 'OPENCLAW_JUDGE_BREAKER_TTL_MS',
+  breakerConsecutive: 'OPENCLAW_JUDGE_BREAKER_CONSECUTIVE_DENY_LIMIT',
+  breakerRolling: 'OPENCLAW_JUDGE_BREAKER_ROLLING_DENY_LIMIT',
 });
 const ALLOWED_JUDGE_NAMES = new Set(Object.values(ENV_NAMES));
 const POLICY_ENV_NAMES = new Set([
@@ -187,6 +192,35 @@ function resolveA2AHitlReplace(environment) {
   return normalized === '1' || normalized === 'true';
 }
 
+function resolveJudgeModel(environment) {
+  const value = explicitValue(environment, ENV_NAMES.modelId);
+  if (value === undefined) {
+    return Object.freeze({
+      modelId: MODEL_ID,
+      source: 'default',
+      fallbackReason: 'OPENCLAW_JUDGE_MODEL_ID_not_set',
+    });
+  }
+  if (!PRINTABLE_ASCII.test(value) || !value.trim()) return invalidConfiguration();
+  return Object.freeze({ modelId: value.trim(), source: 'environment', fallbackReason: null });
+}
+function resolvePositiveInteger(environment, name, fallback, maximum) {
+  const value = explicitValue(environment, name);
+  if (value === undefined) return fallback;
+  if (!CANONICAL_INTEGER.test(value)) return invalidConfiguration();
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= maximum
+    ? parsed : invalidConfiguration();
+}
+
+function resolveBreaker(environment) {
+  return Object.freeze({
+    ttlMs: resolvePositiveInteger(environment, ENV_NAMES.breakerTtl, 1_800_000, 86_400_000),
+    consecutiveDenyLimit: resolvePositiveInteger(environment, ENV_NAMES.breakerConsecutive, 3, 50),
+    rollingDenyLimit: resolvePositiveInteger(environment, ENV_NAMES.breakerRolling, 10, 50),
+  });
+}
+
 function resolveProvider(environment, getSharedProvider) {
   const apiKey = explicitValue(environment, ENV_NAMES.apiKey);
   const baseUrl = explicitValue(environment, ENV_NAMES.baseUrl);
@@ -263,6 +297,8 @@ export function resolveRuntimeSettings(options = {}) {
     );
     const homeDirectory = homeField.present ? homeField.value : os.homedir();
     const audit = resolveAudit(environment, homeDirectory);
+    const judgeModel = resolveJudgeModel(environment);
+    const breaker = resolveBreaker(environment);
 
     return Object.freeze({
       config: Object.freeze({ mode: config.mode, enforcement: config.enforcement }),
@@ -271,6 +307,12 @@ export function resolveRuntimeSettings(options = {}) {
       timeoutMs: resolveTimeout(environment),
       auditPath: audit.auditPath,
       auditRoot: audit.auditRoot,
+      judgeModelId: judgeModel.modelId,
+      judgeModelSource: judgeModel.source,
+      judgeModelFallbackReason: judgeModel.fallbackReason,
+      breakerTtlMs: breaker.ttlMs,
+      breakerConsecutiveDenyLimit: breaker.consecutiveDenyLimit,
+      breakerRollingDenyLimit: breaker.rollingDenyLimit,
       logLevel: resolveLogLevel(environment),
       a2aHitlReplace: resolveA2AHitlReplace(environment),
     });

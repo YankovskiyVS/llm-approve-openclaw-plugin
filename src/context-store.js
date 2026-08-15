@@ -94,9 +94,16 @@ export function createContextStore({ ttlMs, maxEntries, now } = {}) {
     return bySession.get(normalizedSession)?.modelId;
   }
 
+  function getRunIdBySession(sessionKey) {
+    prune();
+    const normalizedSession = normalizeSessionKey(sessionKey);
+    if (!normalizedSession) return undefined;
+    return bySession.get(normalizedSession)?.runId;
+  }
+
   function size() {
     return byRun.size;
   }
 
-  return { put, get, getModel, getBySession, getModelBySession, prune, size };
+  return { put, get, getModel, getBySession, getModelBySession, getRunIdBySession, prune, size };
 }

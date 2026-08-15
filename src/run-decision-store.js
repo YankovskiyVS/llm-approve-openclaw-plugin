@@ -1,6 +1,7 @@
 import { types as utilTypes } from 'node:util';
 import { FEEDBACK_CODES } from './feedback.js';
 import { JUDGE_REASON_CODES } from './judge-schema.js';
+import { classifyToolFamily } from './capability-registry.js';
 
 const ARRAY_IS_ARRAY = Array.isArray;
 const BUFFER_OBJECT = Buffer;
@@ -69,6 +70,11 @@ const TOOL_FAMILIES = new Set([
   'node',
   'generation',
   'skill',
+  'web',
+  'nango',
+  'nango_mail',
+  'nango_disk',
+  'nango_calendar',
   'unknown',
 ]);
 const OUTCOMES = new Set(['allow', 'deny', 'review', 'failure']);
@@ -159,21 +165,7 @@ function validToolName(value) {
   return validBoundedName(value, MAX_TOOL_NAME_LENGTH, MAX_TOOL_NAME_BYTES);
 }
 
-export function classifyToolFamily(toolName) {
-  if (!validToolName(toolName)) return invalidStore();
-  if (setHas(FILESYSTEM_TOOLS, toolName)) return 'filesystem';
-  if (toolName === 'exec' || toolName === 'bash') return 'shell';
-  if (toolName === 'browser') return 'browser';
-  if (toolName === 'message') return 'message';
-  if (setHas(NETWORK_TOOLS, toolName)) return 'network';
-  if (toolName === 'process') return 'process';
-  if (setHas(SESSION_TOOLS, toolName)) return 'session';
-  if (toolName === 'cron') return 'cron';
-  if (toolName === 'nodes') return 'node';
-  if (setHas(GENERATION_TOOLS, toolName)) return 'generation';
-  if (toolName === 'skill_workshop') return 'skill';
-  return 'unknown';
-}
+export { classifyToolFamily } from './capability-registry.js';
 
 function validNullableEnum(value, allowed) {
   return value === null || (typeof value === 'string' && setHas(allowed, value));
@@ -291,8 +283,23 @@ export function createRunDecisionStore(options) {
     return runId;
   }
 
-  function find(runId) {
-    const id = requireRunId(runId);
+  function requireToolFamily(toolFamily) {
+    if (typeof toolFamily !== 'string' || !setHas(TOOL_FAMILIES, toolFamily)) {
+      return invalidStore();
+    }
+    return toolFamily;
+  }
+
+  function scopeKey(runId, userTurnId, toolFamily) {
+    return `${requireRunId(runId)}\u0000${requireRunId(userTurnId)}\u0000${requireToolFamily(toolFamily)}`;
+  }
+
+  function keyBelongsTo(key, runId, userTurnId, toolFamily) {
+    const prefix = `${runId}\u0000${userTurnId === undefined ? '' : `${userTurnId}\u0000`}`;
+    return key.startsWith(prefix) && (toolFamily === undefined || key.endsWith(`\u0000${toolFamily}`));
+  }
+
+  function findKey(id) {
     const now = readClock();
     cleanupExpired(now);
     const entry = REFLECT_APPLY(MAP_GET, runs, [id]);
@@ -300,13 +307,29 @@ export function createRunDecisionStore(options) {
     return { id, now, entry };
   }
 
-  function isTripped(runId) {
-    return find(runId).entry?.tripped === true;
+  function isTripped(runId, userTurnId, toolFamily) {
+    const id = requireRunId(runId);
+    if (userTurnId !== undefined && toolFamily !== undefined) {
+      return findKey(scopeKey(id, userTurnId, toolFamily)).entry?.tripped === true;
+    }
+    const now = readClock();
+    cleanupExpired(now);
+    let matchedKey;
+    let matchedEntry;
+    REFLECT_APPLY(MAP_FOR_EACH, runs, [function findTripped(entry, key) {
+      if (matchedEntry === undefined && keyBelongsTo(key, id, userTurnId, toolFamily)
+        && entry.tripped === true) {
+        matchedKey = key;
+        matchedEntry = entry;
+      }
+    }]);
+    if (matchedEntry !== undefined) touch(matchedKey, matchedEntry, now);
+    return matchedEntry !== undefined;
   }
 
-  function record(runId, metadata) {
-    const id = requireRunId(runId);
+  function record(runId, metadata, userTurnId = runId) {
     const safeMetadata = snapshotMetadata(metadata);
+    const id = scopeKey(runId, userTurnId, safeMetadata.tool_family);
     const now = readClock();
     cleanupExpired(now);
     let entry = REFLECT_APPLY(MAP_GET, runs, [id]);
@@ -359,16 +382,51 @@ export function createRunDecisionStore(options) {
     return status(alreadyTripped, newlyTripped, entry.tripped);
   }
 
-  function snapshot(runId) {
-    const entry = find(runId).entry;
+  function snapshot(runId, userTurnId, toolFamily) {
+    const id = requireRunId(runId);
     const result = [];
     SET_PROTOTYPE_OF(result, null);
-    if (entry) {
+    const entries = [];
+    if (userTurnId !== undefined && toolFamily !== undefined) {
+      const entry = findKey(scopeKey(id, userTurnId, toolFamily)).entry;
+      if (entry) entries[entries.length] = entry;
+    } else {
+      const now = readClock();
+      cleanupExpired(now);
+      const keys = [];
+      SET_PROTOTYPE_OF(keys, null);
+      REFLECT_APPLY(MAP_FOR_EACH, runs, [function collectMatching(entry, key) {
+        if (keyBelongsTo(key, id, userTurnId, toolFamily)) {
+          entries[entries.length] = entry;
+          keys[keys.length] = key;
+        }
+      }]);
+      for (let index = 0; index < entries.length; index += 1) {
+        touch(keys[index], entries[index], now);
+      }
+    }
+    for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+      const entry = entries[entryIndex];
       for (let index = 0; index < entry.history.length; index += 1) {
-        result[index] = cloneMetadata(entry.history[index]);
+        result[result.length] = cloneMetadata(entry.history[index]);
       }
     }
     return FREEZE_OBJECT(result);
+  }
+
+  function reset(runId, userTurnId, toolFamily) {
+    const id = requireRunId(runId);
+    let removed = 0;
+    const keys = [];
+    SET_PROTOTYPE_OF(keys, null);
+    REFLECT_APPLY(MAP_FOR_EACH, runs, [function collectKeys(entry, key) {
+      if (keyBelongsTo(key, id, userTurnId, toolFamily)) keys[keys.length] = key;
+    }]);
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index];
+      if (keyBelongsTo(key, id, userTurnId, toolFamily) && runs.delete(key)) removed += 1;
+    }
+    return removed;
   }
 
   function size() {
@@ -381,6 +439,7 @@ export function createRunDecisionStore(options) {
   api.isTripped = isTripped;
   api.record = record;
   api.snapshot = snapshot;
+  api.reset = reset;
   api.size = size;
   return FREEZE_OBJECT(api);
 }
