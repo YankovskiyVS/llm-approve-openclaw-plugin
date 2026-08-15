@@ -91,12 +91,25 @@ export function attachA2ABridgeAdapter({
     }
 
     if (decision === 'allow-once') {
+      const reserve = typeof bridge.reserveApprovedAction === 'function'
+        ? bridge.reserveApprovedAction
+        : undefined;
+      if (!reserve) {
+        // Older gateways cannot prove exact-action idempotency; use native HITL.
+        return original(params);
+      }
+      let reserved;
       try {
-        logger.info?.('llm-action-judge: a2a autoapprove allow-once (judge approved)');
+        reserved = await reserve.call(bridge, params);
+      } catch {
+        return original(params);
+      }
+      try {
+        logger.info?.(`llm-action-judge: a2a judge-approved reservation ${reserved}`);
       } catch {
         // ignore logger failures
       }
-      return 'allow-once';
+      return reserved;
     }
 
     if (decision === 'deny') {

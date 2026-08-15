@@ -45,9 +45,14 @@ test('autoapprove store tracks runs, sessions, and one-shot decisions', () => {
 test('a2a bridge adapter returns allow-once from judge without HITL wait', async () => {
   const root = Object.create(null);
   const calls = [];
+  const reservations = [];
   root[A2A_BRIDGE_GLOBAL_KEY] = {
     async requestApproval(params) {
       calls.push(params);
+      return 'allow-once';
+    },
+    reserveApprovedAction(params) {
+      reservations.push(params);
       return 'allow-once';
     },
   };
@@ -69,6 +74,7 @@ test('a2a bridge adapter returns allow-once from judge without HITL wait', async
   assert.equal(decision, 'allow-once');
   // Judge is the approver — do not block on manager/HITL.
   assert.equal(calls.length, 0);
+  assert.equal(reservations.length, 1);
 
   const human = await root[A2A_BRIDGE_GLOBAL_KEY].requestApproval({
     runId: 'run-human',
@@ -142,6 +148,9 @@ test('a2a bridge adapter refreshes store pointer after re-attach', async () => {
   root[A2A_BRIDGE_GLOBAL_KEY] = {
     async requestApproval() {
       return 'deny';
+    },
+    reserveApprovedAction() {
+      return 'allow-once';
     },
   };
   const first = createAutoApproveStore({ now: () => 1 });
