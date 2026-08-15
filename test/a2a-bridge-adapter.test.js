@@ -108,7 +108,7 @@ test('a2a bridge adapter denies without HITL wait when judge says deny', async (
   assert.equal(calls.length, 0);
 });
 
-test('a2a bridge adapter allows when decision is missing', async () => {
+test('a2a bridge adapter delegates missing decision to native HITL', async () => {
   const root = Object.create(null);
   const calls = [];
   root[A2A_BRIDGE_GLOBAL_KEY] = {
@@ -133,8 +133,8 @@ test('a2a bridge adapter allows when decision is missing', async () => {
     params: {},
     timeoutMs: 1000,
   });
-  assert.equal(decision, 'allow-once');
-  assert.equal(calls.length, 0);
+  assert.equal(decision, 'deny');
+  assert.equal(calls.length, 1);
 });
 
 test('a2a bridge adapter refreshes store pointer after re-attach', async () => {

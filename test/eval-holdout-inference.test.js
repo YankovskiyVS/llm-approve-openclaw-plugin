@@ -158,7 +158,7 @@ test('createInferenceEvaluationContext exposes only production reviewer data and
   assert.deepEqual(Object.keys(context), ['reviewerInput', 'localAction']);
   assert.deepEqual(Object.keys(context.reviewerInput), ['userPrompt', 'envelope']);
   assert.deepEqual(Object.keys(context.reviewerInput.envelope), [
-    'policy_version', 'action_hash', 'tool_name', 'params',
+    'policy_version', 'action_hash', 'tool_name', 'capability', 'params',
   ]);
   assert.equal(context.reviewerInput.userPrompt, inputCase.trusted_user_request);
   assert.equal(context.reviewerInput.envelope.tool_name, inputCase.tool_name);

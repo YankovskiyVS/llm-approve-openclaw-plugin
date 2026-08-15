@@ -44,6 +44,7 @@ const EXPECTED_PACKAGE_FILES = [
   'src/action.js',
   'src/audit.js',
   'src/autoapprove-store.js',
+  'src/capability-registry.js',
   'src/config.js',
   'src/constants.js',
   'src/context-store.js',

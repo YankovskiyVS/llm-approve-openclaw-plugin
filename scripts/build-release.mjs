@@ -26,6 +26,7 @@ const RELEASE_PACKAGE_FILES = Object.freeze([
   'src/action.js',
   'src/audit.js',
   'src/autoapprove-store.js',
+  'src/capability-registry.js',
   'src/config.js',
   'src/constants.js',
   'src/context-store.js',

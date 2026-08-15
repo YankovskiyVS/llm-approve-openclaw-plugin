@@ -60,7 +60,8 @@ export function createAutoApproveStore({
     },
     putDecision(callId, decision) {
       if (typeof callId !== 'string' || callId.trim() === '') return;
-      if (decision !== 'allow-once' && decision !== 'deny') return;
+      if (decision !== 'allow-once' && decision !== 'deny'
+        && decision !== 'require-approval') return;
       prune(decisions);
       decisions.delete(callId);
       decisions.set(callId, { decision, expiresAt: now() + ttlMs });

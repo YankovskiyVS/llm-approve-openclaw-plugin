@@ -52,7 +52,7 @@ function mergeHookResults(results) {
   return undefined;
 }
 
-test('a2a-gateway + judge composition allows tools on technical judge failure', async () => {
+test('a2a-gateway + judge composition requires native HITL on technical judge failure', async () => {
   const root = Object.create(null);
   const hitlCalls = [];
   root[A2A_BRIDGE_GLOBAL_KEY] = {
@@ -157,11 +157,12 @@ test('a2a-gateway + judge composition allows tools on technical judge failure', 
   const a2aResult = await a2aHook(event, ctx);
   const merged = mergeHookResults([judgeResult, a2aResult]);
 
-  assert.equal(judgeResult?.block, undefined, 'judge must fail-open, not block');
+  assert.equal(judgeResult?.block, undefined, 'judge delegates review to A2A');
   assert.deepEqual(judgeResult?.params, { path: '/tmp/BOOTSTRAP.md' });
-  assert.equal(a2aResult, undefined, 'a2a allow path returns undefined');
-  assert.equal(merged?.block, undefined, 'merged result must not block the tool');
-  assert.equal(hitlCalls.length, 0, 'must not fall through to native HITL wait');
+  assert.equal(a2aResult?.block, true, 'native HITL timeout blocks the tool');
+  assert.equal(merged?.block, true, 'merged result preserves native approval timeout');
+  assert.match(merged.blockReason, /approval timeout/u);
+  assert.equal(hitlCalls.length, 1, 'technical failure must use native HITL');
 });
 
 test('a2a-gateway + judge composition still denies policy deny', async () => {

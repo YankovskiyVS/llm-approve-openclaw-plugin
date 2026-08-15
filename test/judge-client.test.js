@@ -11,6 +11,7 @@ const ENVELOPE = {
   policy_version: POLICY_VERSION,
   action_hash: ACTION_HASH,
   tool_name: 'read',
+  capability: { kind: 'passive', reason: 'known_read_only_tool' },
   params: { path: '/tmp/status' },
 };
 const CONTENT = '{"decision":"allow"}';

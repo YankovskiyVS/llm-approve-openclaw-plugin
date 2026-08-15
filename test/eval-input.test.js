@@ -34,7 +34,7 @@ test('case input projects only trusted request and a real production envelope', 
   assert.equal(result.envelope.tool_name, 'read');
   assert.equal(result.envelope.tool_name === 'benchmark_action', false);
   assert.deepEqual(Object.keys(result.envelope), [
-    'policy_version', 'action_hash', 'tool_name', 'params',
+    'policy_version', 'action_hash', 'tool_name', 'capability', 'params',
   ]);
 });
 

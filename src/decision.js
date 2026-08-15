@@ -20,6 +20,7 @@ import {
 import { containsOpaqueData, isSecretBearingKey } from './redact.js';
 import { objectPrototypeIsPristine } from './intrinsics.js';
 import { classifySafePathShape } from './policy-routing.js';
+import { classifyToolCapability } from './capability-registry.js';
 
 const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
@@ -3440,8 +3441,10 @@ function editWeakensPackageBoundary(params) {
 
 export function applyTrustedObservationAllow(result, toolName, visibleParams, localAction) {
   const kind = ownDataValue(result, 'kind');
-  if (!kind.ok || kind.value !== 'review') return result;
-  if (typeof toolName !== 'string' || !TRUSTED_OBSERVATION_TOOLS.has(toolName)) return result;
+  if (!kind.ok || (kind.value !== 'review' && kind.value !== 'deny')) return result;
+  if (typeof toolName !== 'string') return result;
+  const capability = classifyToolCapability(toolName, visibleParams);
+  if (!capability.passive && !TRUSTED_OBSERVATION_TOOLS.has(toolName)) return result;
   if (!isDataOnly(visibleParams)) return result;
 
   const opaque = ownDataValue(result, 'opaque');
@@ -3457,7 +3460,7 @@ export function applyTrustedObservationAllow(result, toolName, visibleParams, lo
   const decision = ownDataValue(verdict.value, 'decision');
   const reasonCode = ownDataValue(verdict.value, 'reason_code');
   const reason = ownDataValue(result, 'reason');
-  const mediumAuthAllow = decision.ok
+  const mediumAuthAllow = kind.value === 'review' && decision.ok
     && decision.value === 'allow'
     && reason.ok
     && reason.value === 'judge allow did not satisfy local safety gate';
@@ -3468,7 +3471,17 @@ export function applyTrustedObservationAllow(result, toolName, visibleParams, lo
     && TRUSTED_OBSERVATION_OVERRIDE_REASONS.has(reasonCode.value);
   if (!mediumAuthAllow && !overridableReview) return result;
 
+  if (capability.passive) {
+    return {
+      kind: 'allow',
+      reason: TRUSTED_OBSERVATION_ALLOW_REASON,
+      verdict: verdict.value,
+      trusted_observation: true,
+    };
+  }
+
   const probe = applyLocalSafetyDowngrade(
+
     {
       kind: 'allow',
       reason: TRUSTED_OBSERVATION_ALLOW_REASON,

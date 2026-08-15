@@ -6,8 +6,8 @@
  * hook awaits `requestApproval(...)`.
  *
  * For autoapprove chats the judge is the approver: allow-once and deny are
- * returned immediately (no human / manager wait). If no verdict arrives within
- * the judge wait window, autoapprove fails open with allow-once.
+ * returned immediately. require-approval and missing verdicts delegate to the
+ * original A2A bridge so a real approval surface is used.
  *
  * The autoApproveStore reference is kept on the bridge object so mid-run plugin
  * re-registration can refresh it without losing the monkey-patch.
@@ -82,7 +82,8 @@ export function attachA2ABridgeAdapter({
 
     // Wait for judge before_tool_call (priority 1100) to store the verdict.
     let decision = callId ? store.takeDecision(callId) : undefined;
-    if (decision !== 'allow-once' && decision !== 'deny' && callId) {
+    if (decision !== 'allow-once' && decision !== 'deny'
+      && decision !== 'require-approval' && callId) {
       decision = await waitForBridgeDecision(store, callId, {
         attempts: waitAttempts,
         intervalMs: decisionPollIntervalMs,
@@ -107,13 +108,12 @@ export function attachA2ABridgeAdapter({
       return 'deny';
     }
 
-    // Autoapprove chats must not hang on HITL when the judge is slow/missing.
     try {
-      logger.info?.('llm-action-judge: a2a autoapprove missing verdict; allow-once');
+      logger.info?.('llm-action-judge: a2a native approval required');
     } catch {
       // ignore
     }
-    return 'allow-once';
+    return original(params);
   }
 
   bridge.requestApproval = wrappedRequestApproval;
@@ -148,11 +148,13 @@ async function waitForBridgeDecision(store, callId, {
     const peeked = typeof store.peekDecision === 'function'
       ? store.peekDecision(callId)
       : undefined;
-    if (peeked === 'allow-once' || peeked === 'deny') {
+    if (peeked === 'allow-once' || peeked === 'deny'
+      || peeked === 'require-approval') {
       return store.takeDecision(callId);
     }
     const taken = store.takeDecision(callId);
-    if (taken === 'allow-once' || taken === 'deny') {
+    if (taken === 'allow-once' || taken === 'deny'
+      || taken === 'require-approval') {
       return taken;
     }
     await sleep(intervalMs);
